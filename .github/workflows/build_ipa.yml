@@ -1,0 +1,51 @@
+name: Build TrollStore IPA
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # 允许手动点击按钮触发
+
+jobs:
+  build-ios:
+    name: Build iOS IPA
+    runs-on: macos-latest # 使用 GitHub 的 Mac 电脑
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1. 设置 Flutter 环境
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          architecture: x64
+
+      # 2. 安装依赖
+      - name: Install Dependencies
+        run: |
+          flutter pub get
+          cd ios
+          pod install --repo-update
+          cd ..
+
+      # 3. 编译 iOS (无签名模式 - 专为 TrollStore 设计)
+      - name: Build iOS App (No Codesign)
+        run: |
+          flutter build ios --release --no-codesign
+
+      # 4. 打包成 IPA (Payload 结构)
+      - name: Package into IPA
+        run: |
+          mkdir Payload
+          # 将编译好的 Runner.app 移动到 Payload 文件夹
+          mv build/ios/iphoneos/Runner.app Payload/
+          # 压缩为 .ipa 文件
+          zip -r TrollStore_YT_Pro.ipa Payload
+
+      # 5. 上传生成的 IPA 到 GitHub Actions 页面
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: TrollStore_YT_Pro_IPA
+          path: TrollStore_YT_Pro.ipa
+          retention-days: 3
