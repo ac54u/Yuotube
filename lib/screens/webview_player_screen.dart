@@ -15,71 +15,44 @@ class WebViewPlayerScreen extends StatefulWidget {
 class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   InAppWebViewController? webViewController;
   bool _isLoading = true;
-  bool _showControls = false;
+  bool _showControls = false; // 默认隐藏
   Timer? _hideTimer;
 
-  // 🔥 4K 智能锁画质脚本 (带 Debug 回显)
-  final String _smartQualityScript = """
-    // 1. 创建一个悬浮 Debug 窗口，让你亲眼看到 Youtube 到底给了什么画质
-    var debugDiv = document.createElement('div');
-    debugDiv.style.cssText = 'position:fixed; top:10px; left:10px; z-index:99999; color:#0f0; background:rgba(0,0,0,0.7); padding:5px; font-size:10px; pointer-events:none; max-width:300px; word-wrap:break-word;';
-    debugDiv.id = 'yt-debug-overlay';
-    document.body.appendChild(debugDiv);
-    
-    function log(msg) {
-        var d = document.getElementById('yt-debug-overlay');
-        if(d) d.innerText = msg;
-    }
+  // 🖥️ 4K 伪装身份 (Windows Chrome)
+  final String _desktopUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+  
+  // 📱 登录专用身份 (Android Chrome) - 这个身份可以通过 Google 安全检查
+  final String _mobileUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36";
 
+  // 🔥 4K 暴力脚本
+  final String _enforce4KScript = """
     try {
-        // 2. 屏幕欺骗 (Screen Spoofing) - 必须非常激进
         Object.defineProperty(window.screen, 'width', { get: () => 3840 });
         Object.defineProperty(window.screen, 'height', { get: () => 2160 });
-        Object.defineProperty(window, 'devicePixelRatio', { get: () => 3.0 }); // 提升 DPI 权重
-        Object.defineProperty(window, 'innerWidth', { get: () => 3840 }); // 告诉 Embed 容器我有这么宽
-
-        // 3. 循环检测逻辑
+        Object.defineProperty(window, 'devicePixelRatio', { get: () => 2.0 });
+        
         setInterval(() => {
             var player = document.getElementById('movie_player');
-            if (player && player.getAvailableQualityLevels) {
-                
-                // A. 获取真实可用列表
-                var levels = player.getAvailableQualityLevels();
-                var current = player.getPlaybackQuality();
-                
-                // B. 回显给用户看 (关键一步)
-                log('Available: ' + JSON.stringify(levels) + '\\nCurrent: ' + current);
-                
-                // C. 智能选择策略
-                if (levels && levels.length > 0) {
-                    // 优先找 4K/8K
-                    var target = 'hd1080'; // 保底
-                    if (levels.includes('highres')) target = 'highres';
-                    else if (levels.includes('hd2160')) target = 'hd2160';
-                    else if (levels.includes('hd1440')) target = 'hd1440';
-                    
-                    // 只有当当前画质不达标时，才发送请求，避免死循环
-                    if (current !== target && current !== 'highres') {
-                        player.setPlaybackQualityRange(target, target);
-                        player.setPlaybackQuality(target);
-                        console.log('Attempting upgrade to: ' + target);
-                    }
-                }
-            } else {
-                log('Waiting for player API...');
+            if (player && player.setPlaybackQualityRange) {
+                player.setPlaybackQualityRange('highres', 'highres'); 
+                if(player.getPlaybackQuality() !== 'hd2160') player.setPlaybackQuality('hd2160');
             }
-        }, 1000);
-    } catch(e) {
-        log('Error: ' + e);
-    }
+        }, 2000);
+    } catch(e) {}
   """;
 
+  // 🧹 UI 净化脚本
   final String _uiCleanupScript = """
     var style = document.createElement('style');
     style.innerHTML = `
-      .ytp-chrome-top, .ytp-show-cards-title, .ytp-pause-overlay, .ytp-watermark, .ytp-upnext { display: none !important; }
-      body, html { margin: 0; padding: 0; background: #000; overflow: hidden; }
-      #movie_player { width: 100vw !important; height: 100vh !important; }
+      #masthead-container, #secondary, #below, #comments, #related, ytd-merch-shelf-renderer { display: none !important; }
+      ytd-app { background: #000 !important; }
+      #page-manager { margin: 0 !important; }
+      #primary { padding: 0 !important; margin: 0 !important; max-width: 100% !important; }
+      #player { position: fixed !important; top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important; z-index: 1 !important; }
+      .ytp-chrome-top, .ytp-show-cards-title, .ytp-watermark { display: none !important; }
+      /* 隐藏登录弹窗 (如果已经登录了就不需要显示) */
+      ytd-popup-container { display: none !important; }
     `;
     document.head.appendChild(style);
   """;
@@ -89,7 +62,6 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
     super.initState();
     SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeRight, DeviceOrientation.landscapeLeft]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    CookieManager.instance().deleteAllCookies();
   }
 
   @override
@@ -118,29 +90,72 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
         children: [
           InAppWebView(
             initialUrlRequest: URLRequest(
-              // Embed 模式 + 这里的 Referer 是绕过 153 和 登录墙 的关键
-              url: WebUri("https://www.youtube.com/embed/${widget.videoId}?autoplay=1&controls=1&rel=0&playsinline=1&modestbranding=1&enablejsapi=1"),
-              headers: {"Referer": "https://www.youtube.com/watch?v=${widget.videoId}"},
+              // 回归官网 Watch 模式 (只有这模式能看 4K + 登录)
+              url: WebUri("https://www.youtube.com/watch?v=${widget.videoId}"),
             ),
             initialUserScripts: UnmodifiableListView<UserScript>([
               UserScript(
-                source: _smartQualityScript,
+                source: _enforce4KScript,
                 injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
                 forMainFrameOnly: true,
               ),
             ]),
             initialSettings: InAppWebViewSettings(
+              // 默认先用桌面模式 (为了 4K)
               preferredContentMode: UserPreferredContentMode.DESKTOP,
+              userAgent: _desktopUA,
+              
               allowsInlineMediaPlayback: true,
               mediaPlaybackRequiresUserGesture: false,
               useWideViewPort: true,
               loadWithOverviewMode: true,
-              // 使用 Chrome 桌面 UA，配合上面的 Screen Spoof
-              userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
               isInspectable: true,
-              supportZoom: false,
+              supportZoom: true,
             ),
+            
             onWebViewCreated: (controller) => webViewController = controller,
+
+            // 🔥🔥🔥 核心魔法：智能变身逻辑
+            onLoadStart: (controller, url) async {
+              String urlStr = url.toString();
+              
+              // 1. 如果检测到是 Google 登录页 -> 变身安卓手机 (允许登录)
+              if (urlStr.contains("accounts.google.com") || urlStr.contains("google.com/signin")) {
+                print("🛑 检测到登录页，切换为移动端身份以绕过安全检查...");
+                await controller.setSettings(settings: InAppWebViewSettings(
+                  userAgent: _mobileUA, // 切换 UA
+                  preferredContentMode: UserPreferredContentMode.MOBILE,
+                ));
+              }
+              
+              // 2. 如果登录完成回到了 YouTube -> 变身回 Windows 电脑 (为了 4K)
+              else if (urlStr.contains("youtube.com") && !urlStr.contains("accounts.google.com")) {
+                // 获取当前 UA 检查是否需要切换
+                String? currentUA = await controller.getSettings().then((s) => s?.userAgent);
+                if (currentUA != _desktopUA) {
+                  print("✅ 检测到回到 YouTube，切回桌面 4K 身份...");
+                  await controller.setSettings(settings: InAppWebViewSettings(
+                    userAgent: _desktopUA,
+                    preferredContentMode: UserPreferredContentMode.DESKTOP,
+                  ));
+                  // 强制刷新以生效桌面版界面
+                  controller.reload(); 
+                }
+              }
+            },
+
+            // 🔥 路由锁死：防止白屏跳转 App
+            shouldOverrideUrlLoading: (controller, navigationAction) async {
+              var uri = navigationAction.request.url!;
+              
+              // 禁止唤起外部 App (YouTube / Google)
+              if (!["http", "https", "about", "data"].contains(uri.scheme)) {
+                 print("🛑 拦截外部 App 跳转: ${uri.scheme}");
+                 return NavigationActionPolicy.CANCEL;
+              }
+              return NavigationActionPolicy.ALLOW;
+            },
+
             onLoadStop: (controller, url) async {
               await controller.evaluateJavascript(source: _uiCleanupScript);
               if (mounted) setState(() => _isLoading = false);
@@ -150,6 +165,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
           if (_isLoading)
             Container(color: Colors.black, child: const Center(child: CircularProgressIndicator(color: Colors.redAccent))),
 
+          // UI 控制层
           AnimatedOpacity(
             opacity: _showControls ? 1.0 : 0.0,
             duration: const Duration(milliseconds: 300),
@@ -163,11 +179,39 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     child: Row(
                       children: [
-                        InkWell(onTap: () => Navigator.pop(context), child: Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.white.withOpacity(0.1), shape: BoxShape.circle), child: const Icon(Icons.arrow_back, color: Colors.white, size: 24))),
+                        InkWell(
+                          onTap: () => Navigator.pop(context),
+                          child: Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.white.withOpacity(0.1), shape: BoxShape.circle), child: const Icon(Icons.arrow_back, color: Colors.white, size: 24)),
+                        ),
                         const SizedBox(width: 16),
-                        const Text("Debug Mode • Checking Levels...", style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 12)),
-                        const Spacer(),
-                        IconButton(icon: const Icon(Icons.refresh, color: Colors.white70), onPressed: () { setState(() => _isLoading = true); webViewController?.reload(); }),
+                        const Expanded(
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                    Text("Chameleon Mode", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                                    Text("Login Support • 4K Auto", style: TextStyle(color: Colors.greenAccent, fontSize: 10))
+                                ]
+                            )
+                        ),
+                        // 强制登录按钮
+                        TextButton.icon(
+                            icon: const Icon(Icons.login, size: 16, color: Colors.white),
+                            label: const Text("去登录", style: TextStyle(color: Colors.white)),
+                            style: TextButton.styleFrom(backgroundColor: Colors.blueAccent.withOpacity(0.3)),
+                            onPressed: () {
+                                // 手动强制跳转登录页
+                                webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri("https://accounts.google.com/ServiceLogin?service=youtube")));
+                            },
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          icon: const Icon(Icons.refresh, color: Colors.white70),
+                          onPressed: () {
+                            setState(() => _isLoading = true);
+                            webViewController?.reload();
+                          },
+                        ),
                       ],
                     ),
                   ),
