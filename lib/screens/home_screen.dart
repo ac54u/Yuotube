@@ -3,7 +3,7 @@ import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-// 引入我们拆分出去的模块
+// 引入我们的服务和页面
 import '../services/youtube_service.dart';
 import '../services/download_service.dart';
 import 'video_player_screen.dart';
@@ -23,7 +23,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final DownloadService _downloadService = DownloadService();
 
   // 状态变量
-  bool _isBusy = false; // 是否正在忙碌 (下载/解析中)
+  bool _isBusy = false; // 是否正在忙碌 (解析/下载中)
   String _statusText = "";
   double _progress = 0.0;
   Video? _videoInfo; // 存储当前解析出的视频信息
@@ -31,7 +31,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _urlController.dispose();
-    _ytService.dispose();
+    _ytService.dispose(); // 记得释放服务资源
     super.dispose();
   }
 
@@ -72,14 +72,15 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     try {
-      // 获取 ID 的字符串值
+      // 获取 Manifest (包含所有清晰度和音轨)
       final manifest = await _ytService.getManifest(_videoInfo!.id.value);
       
-      // A. 筛选下载用的流 (音画分离，画质从高到低，用于下载和 4K 播放)
+      // A. 筛选高画质流 (用于下载和 4K 播放 - 音画分离)
+      // 这些流通常是 1080p, 1440p, 2160p(4K)
       var downloadStreams = manifest.video.toList();
       downloadStreams.sort((a, b) => b.videoResolution.height.compareTo(a.videoResolution.height));
       
-      // 去重逻辑：同分辨率下优先 MP4
+      // 去重逻辑：同分辨率下优先 MP4 容器
       final uniqueDownloadStreams = <String, VideoStreamInfo>{};
       for (var s in downloadStreams) {
         final label = s.videoQuality.name;
@@ -90,7 +91,8 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
 
-      // B. 筛选在线播放用的流 (Muxed 混合流，画质从高到低，用于 720p 极速播放)
+      // B. 筛选极速播放流 (用于 720p/360p - 音画合并)
+      // 这些流虽然画质一般，但加载极快，不容易转圈
       var playbackStreams = manifest.muxed.toList();
       playbackStreams.sort((a, b) => b.videoResolution.height.compareTo(a.videoResolution.height));
 
@@ -103,7 +105,7 @@ class _HomeScreenState extends State<HomeScreen> {
       });
 
       if (mounted) {
-        // 弹出底部菜单
+        // 弹出底部菜单，把整理好的数据传过去
         _showActionSheet(
           context, 
           uniqueDownloadStreams.values.toList(), 
@@ -118,7 +120,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // ---------------------------------------------------------------------------
-  // 3. 底部菜单 UI (已优化：分离 720p 极速版和 4K 画质版)
+  // 3. 底部菜单 UI (核心入口)
   // ---------------------------------------------------------------------------
   void _showActionSheet(
     BuildContext context, 
@@ -139,11 +141,11 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Text("选择操作", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
             ),
 
-            // 🟢 选项 1: 极速播放 (720p 混合流) - 最稳定，推荐！
+            // 🟢 选项 1: 极速播放 (720p 混合流) - 最稳定
             ListTile(
               leading: const Icon(Icons.play_circle_fill, color: Colors.greenAccent, size: 30),
-              title: const Text("极速播放 (推荐)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              subtitle: const Text("720p • 秒开 • 不卡顿", style: TextStyle(color: Colors.grey, fontSize: 12)),
+              title: const Text("极速播放 (720p)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              subtitle: const Text("秒开 • 不卡顿 • 省流量", style: TextStyle(color: Colors.grey, fontSize: 12)),
               trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
               onTap: () {
                 Navigator.pop(ctx);
@@ -154,27 +156,30 @@ class _HomeScreenState extends State<HomeScreen> {
                   var stableVideo = playbackOptions.first; 
                   Navigator.push(context, MaterialPageRoute(builder: (_) => VideoPlayerScreen(
                     videoUrl: stableVideo.url.toString(),
-                    audioUrl: null, // 🔥 关键：传入 null，表示不需要合并音频，单流直连！
+                    audioUrl: null, // 🔥 传入 null，告诉播放器这是单流，不需要处理音频
                     title: _videoInfo!.title,
                   )));
                 }
               },
             ),
 
-            // 🟡 选项 2: 4K/2K 原画播放 (音画分离) - 网络要求高
+            // 🟡 选项 2: 原画播放 (4K/2K 音画分离) - 配合 VideoPlayerScreen 的满血配置
             if (downloadOptions.isNotEmpty)
               ListTile(
                 leading: const Icon(Icons.high_quality, color: Colors.amber, size: 28),
-                title: const Text("原画播放 (实验性)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                title: const Text("原画播放 (4K / 2K)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                 subtitle: Text("尝试播放 ${downloadOptions.first.videoQuality.name} • 需强力网络", style: const TextStyle(color: Colors.grey, fontSize: 12)),
                 trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
                 onTap: () {
                   Navigator.pop(ctx);
                   // 取最高画质的分离流
                   var bestVideo = downloadOptions.first; 
+                  
                   Navigator.push(context, MaterialPageRoute(builder: (_) => VideoPlayerScreen(
                     videoUrl: bestVideo.url.toString(),
-                    audioUrl: audioStream.url.toString(), // 传入音频流，尝试 4K 合成
+                    // 🔥 关键点：必须传入 audioStream 的 URL！
+                    // 这样播放器才能开启 "双流拼接" 模式，实现 4K 有声播放
+                    audioUrl: audioStream.url.toString(), 
                     title: _videoInfo!.title,
                   )));
                 },
@@ -199,7 +204,7 @@ class _HomeScreenState extends State<HomeScreen> {
               padding: EdgeInsets.only(left: 16, top: 8, bottom: 8),
               child: Align(
                 alignment: Alignment.centerLeft,
-                child: Text("下载到相册 (硬件加速)", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                child: Text("下载到相册 (3线程加速)", style: TextStyle(color: Colors.grey, fontSize: 12)),
               ),
             ),
 
@@ -240,7 +245,6 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     try {
-      // 调用 Service
       await _downloadService.downloadAndMerge(
         video: _videoInfo!,
         videoStream: videoStream,
@@ -260,7 +264,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted) {
         setState(() {
           _isBusy = false;
-          // 如果成功，文字会停留在 "✅ 下载完成"
+          // 如果成功，保留最后一句话提示
           if (_progress < 1.0) _statusText = ""; 
         });
       }
@@ -271,7 +275,6 @@ class _HomeScreenState extends State<HomeScreen> {
   // 5. 触发 DeepSeek 翻译逻辑
   // ---------------------------------------------------------------------------
   Future<void> _triggerDeepSeekTranslation() async {
-    // 获取 Key
     final prefs = await SharedPreferences.getInstance();
     final apiKey = prefs.getString('deepseek_key');
     
@@ -311,7 +314,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // 错误处理辅助函数
   void _handleError(String msg) {
     if (!mounted) return;
     setState(() {
@@ -332,7 +334,7 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 输入卡片
+            // 1. 输入框区域
             Card(
               elevation: 4,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -356,7 +358,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 24),
 
-            // 视频信息卡片
+            // 2. 视频信息卡片 (解析成功后显示)
             if (_videoInfo != null) ...[
               Card(
                 clipBehavior: Clip.antiAlias,
@@ -395,7 +397,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               const SizedBox(height: 24),
 
-              // 主操作按钮
+              // 3. 进度条或大按钮
               if (_isBusy) ...[
                 Column(
                   children: [
@@ -426,6 +428,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
             ] else ...[
+               // 4. 空状态提示
                Center(child: Column(children: [const SizedBox(height: 40), Icon(Icons.ondemand_video, size: 80, color: Colors.grey.withOpacity(0.3)), const SizedBox(height: 10), Text("MediaKit 4K 播放 • DeepSeek 翻译", style: TextStyle(color: Colors.grey.withOpacity(0.5)))]))
             ]
           ],
