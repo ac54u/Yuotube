@@ -6,6 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/youtube_service.dart';
 import '../services/download_service.dart';
 import 'video_player_screen.dart';
+// 🔥 新增：引入 Webview 播放器页面
+import 'webview_player_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -122,6 +124,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
 
             // 🟢 选项 1: 极速播放 (直连 720p)
+            // 保留此选项用于快速预览，不卡顿
             ListTile(
               leading: const Icon(Icons.play_circle_fill, color: Colors.greenAccent, size: 30),
               title: const Text("极速播放 (720p)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
@@ -139,25 +142,24 @@ class _HomeScreenState extends State<HomeScreen> {
               },
             ),
 
-            // ☁️ 选项 2: 云端 4K 影院 (服务器转码)
+            // 🔵 选项 2: 网页内核 4K (最稳方案)
+            // 🔥 这里替换了原来的云端服务器，改用 WebView
             ListTile(
-              leading: const Icon(Icons.cloud_circle, color: Colors.amber, size: 30),
-              title: const Text("云端 4K 影院 (推荐)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              subtitle: const Text("私有服务器转码 • 满速 4K • 不卡顿", style: TextStyle(color: Colors.grey, fontSize: 12)),
+              leading: const Icon(Icons.public, color: Colors.blueAccent, size: 30),
+              title: const Text("网页内核播放 (4K)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              subtitle: const Text("模拟桌面浏览器 • 100% 成功 • 支持 2160p", style: TextStyle(color: Colors.grey, fontSize: 12)),
               trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
               onTap: () {
                 Navigator.pop(ctx);
-                // 🔥 关键修改：传入 Video ID，而不是 URL
-                // 这样播放器就知道去请求你的服务器了
-                Navigator.push(context, MaterialPageRoute(builder: (_) => VideoPlayerScreen(
-                  videoInput: _videoInfo!.id.value, // 传入 ID (例如 dQw4w9WgXcQ)
-                  title: _videoInfo!.title,
-                  isCloudMode: true, // 开启云端模式
+                
+                // 跳转到我们新建的 WebView 播放页面
+                Navigator.push(context, MaterialPageRoute(builder: (_) => WebViewPlayerScreen(
+                  videoId: _videoInfo!.id.value, // 传入 ID
                 )));
               },
             ),
 
-            // 🔵 选项 3: DeepSeek 翻译
+            // 🟣 选项 3: DeepSeek 翻译
             ListTile(
               leading: const Icon(Icons.auto_awesome, color: Color(0xFF4D88FF), size: 24),
               title: const Text("DeepSeek 字幕翻译", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),

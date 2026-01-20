@@ -19,6 +19,9 @@ dependencies:
   
   # 视频转码 (4K 合成核心，使用社区修复版)
   ffmpeg_kit_flutter_new: ^4.1.0
+   # ... 其他依赖
+  flutter_inappwebview: ^6.0.0
+
   
   # AI 翻译 (用于辅助 DeepSeek 字幕处理)
   translator: ^1.0.0
