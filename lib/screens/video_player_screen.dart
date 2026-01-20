@@ -25,7 +25,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   late final VideoController controller;
 
   // 🔥 1. 核心伪装头：模拟 Chrome 浏览器，防止 403 Forbidden
-  // 如果没有这个，YouTube 会拒绝连接，导致一直转圈
   final Map<String, String> _headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     'Referer': 'https://www.youtube.com/',
@@ -35,6 +34,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   @override
   void initState() {
     super.initState();
+    // 保持屏幕常亮
     WakelockPlus.enable();
     
     // 初始化播放器
@@ -45,40 +45,47 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     _playVideo();
   }
 
+  // ---------------------------------------------------------------------------
+  // 🚀 核心修复：针对 4K 播放的大缓存配置
+  // ---------------------------------------------------------------------------
   Future<void> _initPlayerConfig() async {
-    // 🔥 2. 强制播放器走代理 (解决部分 VPN 不生效的问题)
-    // 只有当你的 VPN 开了 "TUN 模式" 或 "全局模式" 时，这步才不需要
-    // 如果你发现还是连不上，可以尝试解开下面这行的注释，并填入你代理软件的端口 (比如 Clsh 通常是 7890)
+    // 如果你的 VPN 需要强制指定代理，请解开下面这行并修改端口
     // await (player.platform as NativePlayer).setProperty('http-proxy', 'http://127.0.0.1:7890');
     
-    // 优化缓冲设置，减少转圈
+    // 🔥 开启缓存 (MPV 默认策略很保守，这里我们强制开启)
     await (player.platform as NativePlayer).setProperty('cache', 'yes');
-    await (player.platform as NativePlayer).setProperty('demuxer-max-bytes', '50000000'); // 50MB 缓存
+    
+    // 🔥 设置 128MB 超大缓存 (单位是字节)
+    // 默认只有几 MB，看 4K 根本不够，128MB 足够缓冲几十秒的高码率视频
+    await (player.platform as NativePlayer).setProperty('demuxer-max-bytes', '${128 * 1024 * 1024}'); 
+    
+    // 🔥 增加预读取时间到 30秒
+    // 让播放器像推土机一样尽可能多地把后面的数据拉下来
+    await (player.platform as NativePlayer).setProperty('demuxer-readahead-secs', '30');
   }
 
   Future<void> _playVideo() async {
-    // 4K 音画分离模式
+    // 🟢 4K 音画分离模式 (双流)
     if (widget.audioUrl != null) {
       await player.open(
         Media(
           widget.videoUrl,
-          httpHeaders: _headers, // 注入 Header
+          httpHeaders: _headers, // 注入伪装头
         ),
-        play: false, 
+        play: false, // 先暂停，等音频轨挂载
       );
       
-      // 加载音轨也需要 Header
-      // 注意：MediaKit 目前对 AudioTrack 的 headers 支持可能有限，但在新版中已改善
+      // 挂载音频流
       await player.setAudioTrack(AudioTrack.uri(widget.audioUrl!));
       
       await player.play();
     } 
-    // 720p 混合流模式 (最稳)
+    // 🟢 720p/1080p 混合流模式 (单流)
     else {
       await player.open(
         Media(
           widget.videoUrl,
-          httpHeaders: _headers, // 注入 Header
+          httpHeaders: _headers,
         ),
       );
     }
@@ -87,7 +94,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   @override
   void dispose() {
     player.dispose();
-    WakelockPlus.disable();
+    WakelockPlus.disable(); // 恢复屏幕休眠
     super.dispose();
   }
 
