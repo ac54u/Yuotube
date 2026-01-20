@@ -12,44 +12,43 @@ class WebViewPlayerScreen extends StatefulWidget {
 
 class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   InAppWebViewController? webViewController;
-  
-  // 注入脚本：
-  // 1. 强制视频播放器全屏覆盖
-  // 2. 移除所有广告、评论、侧边栏
-  // 3. 自动播放
+
+  // 💉 桌面版专用去广告脚本
+  // 这里的 CSS 选择器专门针对 YouTube PC 网页版
   final String _injectScript = """
-    // 隐藏滚动条
-    document.body.style.overflow = 'hidden';
-    
-    // 创建一个超强 CSS 来隐藏无关元素，只留播放器
+    // 1. 暴力隐藏所有干扰元素 (顶栏、侧边栏、评论、推荐视频)
     var style = document.createElement('style');
     style.innerHTML = `
-      /* 隐藏头部、侧边栏、评论、推荐 */
       #masthead-container, #secondary, #below, #comments, #related, ytd-merch-shelf-renderer { display: none !important; }
-      
-      /* 强制播放器铺满全屏 */
       ytd-app { background: #000 !important; }
       #page-manager { margin: 0 !important; }
       #primary { padding: 0 !important; margin: 0 !important; max-width: 100% !important; }
+      
+      /* 强制播放器铺满全屏 */
       #player { position: fixed !important; top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important; z-index: 99999 !important; }
       #player-container-outer { max-width: 100% !important; }
       #player-container-inner { padding: 0 !important; }
       
-      /* 隐藏广告层 */
-      .ytp-ad-module, .ytp-ad-overlay-container { display: none !important; }
+      /* 隐藏广告容器 */
+      .ytp-ad-module, .ytp-ad-overlay-container, .ytp-ad-player-overlay { display: none !important; }
+      
+      /* 隐藏不需要的按钮 (比如"在App中打开") */
+      .ytp-button[aria-label="在 App 中打开"] { display: none !important; }
     `;
     document.head.appendChild(style);
 
-    // 尝试自动播放
+    // 2. 自动播放与点击
     setTimeout(function() {
         var video = document.querySelector('video');
         if (video) { 
           video.play(); 
         }
-        // 尝试点击"不用了" (针对登录弹窗)
+        // 关闭可能的弹窗
         var dismissBtn = document.querySelector('yt-button-renderer#dismiss-button');
         if(dismissBtn) dismissBtn.click();
-    }, 1500);
+        
+        // 尝试自动点击"设置" -> 选最高画质 (可选，因网络原因可能不稳，主要靠手动选)
+    }, 1000);
   """;
 
   @override
@@ -60,6 +59,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
       DeviceOrientation.landscapeRight,
       DeviceOrientation.landscapeLeft,
     ]);
+    // 隐藏状态栏
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   }
 
@@ -78,26 +78,30 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
         children: [
           InAppWebView(
             initialUrlRequest: URLRequest(
-              // 🔥 核心修改：不再使用 /embed/，而是使用桌面版官网 /watch?v=
-              // 这能完美绕过 Error 153，因为 YouTube 认为你在用电脑浏览器访问官网
-              url: WebUri("https://www.youtube.com/watch?v=${widget.videoId}&autoplay=1"),
+              // 直接访问 Desktop 版 Watch 页面
+              url: WebUri("https://www.youtube.com/watch?v=${widget.videoId}"),
             ),
             initialSettings: InAppWebViewSettings(
-              mediaPlaybackRequiresUserGesture: false,
+              // 🔥 核心修改 1: iOS 强制请求桌面站点 (解决 360p 和 广告问题)
+              preferredContentMode: UserPreferredContentMode.DESKTOP,
+              
+              // 🔥 核心修改 2: 允许内联播放 (解决 iOS 自动弹系统播放器问题)
               allowsInlineMediaPlayback: true,
-              // 🔥 必须伪装成 Desktop Chrome，否则会跳转到 m.youtube.com (只有720p)
+              mediaPlaybackRequiresUserGesture: false,
+              
+              // 伪装 UserAgent (双重保险)
               userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-              useHybridComposition: true, 
-              javaScriptEnabled: true,
-              domStorageEnabled: true,
-              // 允许缩放，防止某些机型显示异常
-              supportZoom: false,
+              
+              // 其他配置
+              isInspectable: true,
+              useHybridComposition: true,
+              supportZoom: false, // 禁止缩放，防止布局乱掉
             ),
             onWebViewCreated: (controller) {
               webViewController = controller;
             },
             onLoadStop: (controller, url) async {
-              // 页面加载完，执行"截肢手术"，把多余UI砍掉
+              // 注入去广告 CSS
               await controller.evaluateJavascript(source: _injectScript);
             },
           ),
