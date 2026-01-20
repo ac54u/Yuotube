@@ -15,44 +15,85 @@ class WebViewPlayerScreen extends StatefulWidget {
 class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   InAppWebViewController? webViewController;
   bool _isLoading = true;
-  bool _showControls = false; // 默认隐藏
+  bool _showControls = false;
   Timer? _hideTimer;
 
-  // 🖥️ 4K 伪装身份 (Windows Chrome)
-  final String _desktopUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
-  
-  // 📱 登录专用身份 (Android Chrome) - 这个身份可以通过 Google 安全检查
+  // 🖥️ 桌面身份 (4K)
+  final String _desktopUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
+  // 📱 登录身份 (Android)
   final String _mobileUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36";
 
-  // 🔥 4K 暴力脚本
-  final String _enforce4KScript = """
-    try {
-        Object.defineProperty(window.screen, 'width', { get: () => 3840 });
-        Object.defineProperty(window.screen, 'height', { get: () => 2160 });
-        Object.defineProperty(window, 'devicePixelRatio', { get: () => 2.0 });
-        
-        setInterval(() => {
-            var player = document.getElementById('movie_player');
-            if (player && player.setPlaybackQualityRange) {
-                player.setPlaybackQualityRange('highres', 'highres'); 
-                if(player.getPlaybackQuality() !== 'hd2160') player.setPlaybackQuality('hd2160');
+  // 🔥 核心脚本：伪造宽屏 + 强制 4K
+  final String _resolutionHackScript = """
+    // 1. 强制修改 Viewport (把手机窄屏伪装成 1920 宽屏)
+    // 这是解锁 4K 选项的最关键一步！
+    var meta = document.querySelector('meta[name="viewport"]');
+    if (meta) {
+        meta.setAttribute('content', 'width=1920, initial-scale=1.0');
+    } else {
+        var newMeta = document.createElement('meta');
+        newMeta.name = 'viewport';
+        newMeta.content = 'width=1920, initial-scale=1.0';
+        document.getElementsByTagName('head')[0].appendChild(newMeta);
+    }
+
+    // 2. 欺骗 JS 层面的屏幕宽度
+    Object.defineProperty(window.screen, 'width', { get: () => 3840 });
+    Object.defineProperty(window.screen, 'height', { get: () => 2160 });
+    Object.defineProperty(window, 'innerWidth', { get: () => 1920 });
+    Object.defineProperty(window, 'innerHeight', { get: () => 1080 });
+    Object.defineProperty(window, 'devicePixelRatio', { get: () => 2.0 });
+
+    // 3. 暴力轮询设置画质
+    setInterval(() => {
+        var player = document.getElementById('movie_player');
+        if (player && player.setPlaybackQualityRange) {
+            // 尝试设定最高画质
+            player.setPlaybackQualityRange('highres', 'highres');
+            // 如果卡在 360p，尝试强制切 1080p+
+            if(player.getPlaybackQuality() === 'medium' || player.getPlaybackQuality() === 'small') {
+                 player.setPlaybackQuality('hd1080'); 
+                 player.setPlaybackQuality('hd2160');
             }
-        }, 2000);
-    } catch(e) {}
+        }
+    }, 3000);
   """;
 
-  // 🧹 UI 净化脚本
-  final String _uiCleanupScript = """
+  // 🧹 UI 修复脚本 (解决白边和居中问题)
+  final String _cssFixScript = """
     var style = document.createElement('style');
     style.innerHTML = `
+      /* 隐藏干扰元素 */
       #masthead-container, #secondary, #below, #comments, #related, ytd-merch-shelf-renderer { display: none !important; }
-      ytd-app { background: #000 !important; }
-      #page-manager { margin: 0 !important; }
-      #primary { padding: 0 !important; margin: 0 !important; max-width: 100% !important; }
-      #player { position: fixed !important; top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important; z-index: 1 !important; }
-      .ytp-chrome-top, .ytp-show-cards-title, .ytp-watermark { display: none !important; }
-      /* 隐藏登录弹窗 (如果已经登录了就不需要显示) */
-      ytd-popup-container { display: none !important; }
+      .ytp-chrome-top, .ytp-show-cards-title { display: none !important; }
+      ytd-popup-container { display: none !important; } /* 隐藏弹窗 */
+      
+      /* 🔥 强制全屏铺满，不留白边 */
+      body, html, ytd-app { 
+          background: #000 !important; 
+          width: 100vw !important; 
+          height: 100vh !important; 
+          overflow: hidden !important; 
+          margin: 0 !important;
+          padding: 0 !important;
+      }
+      
+      #page-manager { margin: 0 !important; width: 100% !important; height: 100% !important; }
+      #primary { padding: 0 !important; margin: 0 !important; max-width: 100% !important; width: 100% !important; }
+      
+      /* 播放器强制居中放大 */
+      #player { 
+          position: fixed !important; 
+          top: 0 !important; 
+          left: 0 !important; 
+          width: 100vw !important; 
+          height: 100vh !important; 
+          z-index: 1 !important; 
+      }
+      #player-container-outer, #player-container-inner, .html5-video-container, video {
+          width: 100% !important;
+          height: 100% !important;
+      }
     `;
     document.head.appendChild(style);
   """;
@@ -90,74 +131,66 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
         children: [
           InAppWebView(
             initialUrlRequest: URLRequest(
-              // 回归官网 Watch 模式 (只有这模式能看 4K + 登录)
               url: WebUri("https://www.youtube.com/watch?v=${widget.videoId}"),
             ),
             initialUserScripts: UnmodifiableListView<UserScript>([
               UserScript(
-                source: _enforce4KScript,
-                injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+                source: _resolutionHackScript,
+                injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END, // 改为 End 确保覆盖原有的 meta 标签
                 forMainFrameOnly: true,
               ),
             ]),
             initialSettings: InAppWebViewSettings(
-              // 默认先用桌面模式 (为了 4K)
               preferredContentMode: UserPreferredContentMode.DESKTOP,
-              userAgent: _desktopUA,
+              userAgent: _desktopUA, // 默认桌面身份
               
               allowsInlineMediaPlayback: true,
               mediaPlaybackRequiresUserGesture: false,
+              
+              // 🔥 关键设置：允许缩放，开启宽屏概览
               useWideViewPort: true,
               loadWithOverviewMode: true,
+              
               isInspectable: true,
               supportZoom: true,
+              
+              // 混合渲染模式 (Android)
+              useHybridComposition: true,
             ),
             
             onWebViewCreated: (controller) => webViewController = controller,
 
-            // 🔥🔥🔥 核心魔法：智能变身逻辑
+            // 🔥 身份切换逻辑 (变色龙)
             onLoadStart: (controller, url) async {
               String urlStr = url.toString();
-              
-              // 1. 如果检测到是 Google 登录页 -> 变身安卓手机 (允许登录)
-              if (urlStr.contains("accounts.google.com") || urlStr.contains("google.com/signin")) {
-                print("🛑 检测到登录页，切换为移动端身份以绕过安全检查...");
+              if (urlStr.contains("accounts.google.com")) {
+                // 切 Android 登录
                 await controller.setSettings(settings: InAppWebViewSettings(
-                  userAgent: _mobileUA, // 切换 UA
+                  userAgent: _mobileUA,
                   preferredContentMode: UserPreferredContentMode.MOBILE,
                 ));
-              }
-              
-              // 2. 如果登录完成回到了 YouTube -> 变身回 Windows 电脑 (为了 4K)
-              else if (urlStr.contains("youtube.com") && !urlStr.contains("accounts.google.com")) {
-                // 获取当前 UA 检查是否需要切换
-                String? currentUA = await controller.getSettings().then((s) => s?.userAgent);
+              } else if (urlStr.contains("youtube.com") && !urlStr.contains("accounts")) {
+                // 切 Desktop 看片
+                var currentUA = await controller.getSettings().then((s) => s?.userAgent);
                 if (currentUA != _desktopUA) {
-                  print("✅ 检测到回到 YouTube，切回桌面 4K 身份...");
-                  await controller.setSettings(settings: InAppWebViewSettings(
+                   await controller.setSettings(settings: InAppWebViewSettings(
                     userAgent: _desktopUA,
                     preferredContentMode: UserPreferredContentMode.DESKTOP,
+                    useWideViewPort: true, // 确保宽屏
                   ));
-                  // 强制刷新以生效桌面版界面
-                  controller.reload(); 
+                  controller.reload(); // 必须刷新才能生效
                 }
               }
             },
 
-            // 🔥 路由锁死：防止白屏跳转 App
             shouldOverrideUrlLoading: (controller, navigationAction) async {
               var uri = navigationAction.request.url!;
-              
-              // 禁止唤起外部 App (YouTube / Google)
-              if (!["http", "https", "about", "data"].contains(uri.scheme)) {
-                 print("🛑 拦截外部 App 跳转: ${uri.scheme}");
-                 return NavigationActionPolicy.CANCEL;
-              }
+              if (!["http", "https"].contains(uri.scheme)) return NavigationActionPolicy.CANCEL;
               return NavigationActionPolicy.ALLOW;
             },
 
             onLoadStop: (controller, url) async {
-              await controller.evaluateJavascript(source: _uiCleanupScript);
+              await controller.evaluateJavascript(source: _cssFixScript);
               if (mounted) setState(() => _isLoading = false);
             },
           ),
@@ -189,24 +222,25 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                    Text("Chameleon Mode", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-                                    Text("Login Support • 4K Auto", style: TextStyle(color: Colors.greenAccent, fontSize: 10))
+                                    Text("Logged In • Cinema Mode", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                                    Text("Force 1920px Viewport", style: TextStyle(color: Colors.amber, fontSize: 10))
                                 ]
                             )
                         ),
-                        // 强制登录按钮
+                        // 登录按钮
                         TextButton.icon(
                             icon: const Icon(Icons.login, size: 16, color: Colors.white),
-                            label: const Text("去登录", style: TextStyle(color: Colors.white)),
+                            label: const Text("登录修复", style: TextStyle(color: Colors.white)),
                             style: TextButton.styleFrom(backgroundColor: Colors.blueAccent.withOpacity(0.3)),
                             onPressed: () {
-                                // 手动强制跳转登录页
                                 webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri("https://accounts.google.com/ServiceLogin?service=youtube")));
                             },
                         ),
                         const SizedBox(width: 8),
+                        // 刷新按钮 (关键)
                         IconButton(
                           icon: const Icon(Icons.refresh, color: Colors.white70),
+                          tooltip: "画质不行点这里",
                           onPressed: () {
                             setState(() => _isLoading = true);
                             webViewController?.reload();
