@@ -72,10 +72,10 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     try {
-      // 🔥 核心修复点：使用 .value 获取字符串类型的 ID
+      // 获取 ID 的字符串值
       final manifest = await _ytService.getManifest(_videoInfo!.id.value);
       
-      // A. 筛选下载用的流 (音画分离，画质从高到低)
+      // A. 筛选下载用的流 (音画分离，画质从高到低，用于下载和 4K 播放)
       var downloadStreams = manifest.video.toList();
       downloadStreams.sort((a, b) => b.videoResolution.height.compareTo(a.videoResolution.height));
       
@@ -90,7 +90,7 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
 
-      // B. 筛选在线播放用的流 (Muxed 混合流，画质从高到低)
+      // B. 筛选在线播放用的流 (Muxed 混合流，画质从高到低，用于 720p 极速播放)
       var playbackStreams = manifest.muxed.toList();
       playbackStreams.sort((a, b) => b.videoResolution.height.compareTo(a.videoResolution.height));
 
@@ -118,7 +118,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // ---------------------------------------------------------------------------
-  // 3. 底部菜单 UI
+  // 3. 底部菜单 UI (已优化：分离 720p 极速版和 4K 画质版)
   // ---------------------------------------------------------------------------
   void _showActionSheet(
     BuildContext context, 
@@ -139,29 +139,48 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Text("选择操作", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
             ),
 
-            // 🟢 在线播放入口
+            // 🟢 选项 1: 极速播放 (720p 混合流) - 最稳定，推荐！
             ListTile(
               leading: const Icon(Icons.play_circle_fill, color: Colors.greenAccent, size: 30),
-              title: const Text("在线播放", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              subtitle: const Text("MediaKit 内核 • 支持 4K 音画分离", style: TextStyle(color: Colors.grey, fontSize: 12)),
+              title: const Text("极速播放 (推荐)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              subtitle: const Text("720p • 秒开 • 不卡顿", style: TextStyle(color: Colors.grey, fontSize: 12)),
               trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
               onTap: () {
                 Navigator.pop(ctx);
-                if (downloadOptions.isEmpty) { // 注意：MediaKit 可以播放分离流，所以我们用 downloadOptions 判断
-                   _handleError("该视频无法播放");
+                if (playbackOptions.isEmpty) {
+                   _handleError("没有找到可用的 720p 源");
                 } else {
-                  // 取最高画质的分离流进行播放
-                  var bestVideo = downloadOptions.first; 
+                  // 取最高质量的混合流 (通常是 720p)
+                  var stableVideo = playbackOptions.first; 
                   Navigator.push(context, MaterialPageRoute(builder: (_) => VideoPlayerScreen(
-                    videoUrl: bestVideo.url.toString(),
-                    audioUrl: audioStream.url.toString(), // 传入音频流，实现 4K 播放
+                    videoUrl: stableVideo.url.toString(),
+                    audioUrl: null, // 🔥 关键：传入 null，表示不需要合并音频，单流直连！
                     title: _videoInfo!.title,
                   )));
                 }
               },
             ),
 
-            // 🔵 DeepSeek 字幕翻译入口
+            // 🟡 选项 2: 4K/2K 原画播放 (音画分离) - 网络要求高
+            if (downloadOptions.isNotEmpty)
+              ListTile(
+                leading: const Icon(Icons.high_quality, color: Colors.amber, size: 28),
+                title: const Text("原画播放 (实验性)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: Text("尝试播放 ${downloadOptions.first.videoQuality.name} • 需强力网络", style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  // 取最高画质的分离流
+                  var bestVideo = downloadOptions.first; 
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => VideoPlayerScreen(
+                    videoUrl: bestVideo.url.toString(),
+                    audioUrl: audioStream.url.toString(), // 传入音频流，尝试 4K 合成
+                    title: _videoInfo!.title,
+                  )));
+                },
+              ),
+
+            // 🔵 选项 3: DeepSeek 字幕翻译
             ListTile(
               leading: const Icon(Icons.auto_awesome, color: Color(0xFF4D88FF), size: 24),
               title: const Text("DeepSeek 字幕翻译", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
@@ -175,6 +194,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
             const Divider(color: Colors.white10),
             
+            // 🔴 下载列表
             const Padding(
               padding: EdgeInsets.only(left: 16, top: 8, bottom: 8),
               child: Align(
@@ -183,7 +203,6 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
 
-            // 🔴 下载列表
             Expanded(
               child: ListView.builder(
                 itemCount: downloadOptions.length,
