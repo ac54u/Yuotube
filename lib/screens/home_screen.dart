@@ -3,7 +3,6 @@ import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-// 引入我们的服务和页面
 import '../services/youtube_service.dart';
 import '../services/download_service.dart';
 import 'video_player_screen.dart';
@@ -17,29 +16,23 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController _urlController = TextEditingController();
-  
-  // 实例化服务
   final YoutubeService _ytService = YoutubeService();
   final DownloadService _downloadService = DownloadService();
 
-  // 状态变量
-  bool _isBusy = false; // 是否正在忙碌 (解析/下载中)
+  bool _isBusy = false;
   String _statusText = "";
   double _progress = 0.0;
-  Video? _videoInfo; // 存储当前解析出的视频信息
+  Video? _videoInfo;
 
   @override
   void dispose() {
     _urlController.dispose();
-    _ytService.dispose(); // 记得释放服务资源
+    _ytService.dispose();
     super.dispose();
   }
 
-  // ---------------------------------------------------------------------------
-  // 1. 解析视频逻辑
-  // ---------------------------------------------------------------------------
   Future<void> analyzeVideo() async {
-    FocusScope.of(context).unfocus(); // 收起键盘
+    FocusScope.of(context).unfocus();
     if (_urlController.text.isEmpty) return;
 
     setState(() {
@@ -60,27 +53,21 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // 2. 准备资源 (点击大按钮后触发)
-  // ---------------------------------------------------------------------------
   Future<void> prepareResource() async {
     if (_videoInfo == null) return;
 
     setState(() {
       _isBusy = true;
-      _statusText = "正在获取流媒体清单...";
+      _statusText = "正在获取资源...";
     });
 
     try {
-      // 获取 Manifest (包含所有清晰度和音轨)
       final manifest = await _ytService.getManifest(_videoInfo!.id.value);
       
-      // A. 筛选高画质流 (用于下载和 4K 播放 - 音画分离)
-      // 这些流通常是 1080p, 1440p, 2160p(4K)
+      // 筛选下载用的流
       var downloadStreams = manifest.video.toList();
       downloadStreams.sort((a, b) => b.videoResolution.height.compareTo(a.videoResolution.height));
       
-      // 去重逻辑：同分辨率下优先 MP4 容器
       final uniqueDownloadStreams = <String, VideoStreamInfo>{};
       for (var s in downloadStreams) {
         final label = s.videoQuality.name;
@@ -91,12 +78,10 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
 
-      // B. 筛选极速播放流 (用于 720p/360p - 音画合并)
-      // 这些流虽然画质一般，但加载极快，不容易转圈
+      // 筛选在线播放流 (720p)
       var playbackStreams = manifest.muxed.toList();
       playbackStreams.sort((a, b) => b.videoResolution.height.compareTo(a.videoResolution.height));
 
-      // C. 获取最佳音频流 (用于 4K 合成)
       var audioStream = manifest.audio.withHighestBitrate();
 
       setState(() {
@@ -105,7 +90,6 @@ class _HomeScreenState extends State<HomeScreen> {
       });
 
       if (mounted) {
-        // 弹出底部菜单，把整理好的数据传过去
         _showActionSheet(
           context, 
           uniqueDownloadStreams.values.toList(), 
@@ -113,15 +97,11 @@ class _HomeScreenState extends State<HomeScreen> {
           audioStream
         );
       }
-
     } catch (e) {
       _handleError("资源获取失败: $e");
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // 3. 底部菜单 UI (核心入口)
-  // ---------------------------------------------------------------------------
   void _showActionSheet(
     BuildContext context, 
     List<VideoStreamInfo> downloadOptions, 
@@ -141,56 +121,47 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Text("选择操作", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
             ),
 
-            // 🟢 选项 1: 极速播放 (720p 混合流) - 最稳定
+            // 🟢 选项 1: 极速播放 (直连 720p)
             ListTile(
               leading: const Icon(Icons.play_circle_fill, color: Colors.greenAccent, size: 30),
               title: const Text("极速播放 (720p)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              subtitle: const Text("秒开 • 不卡顿 • 省流量", style: TextStyle(color: Colors.grey, fontSize: 12)),
-              trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
+              subtitle: const Text("直连 YouTube • 秒开", style: TextStyle(color: Colors.grey, fontSize: 12)),
               onTap: () {
                 Navigator.pop(ctx);
-                if (playbackOptions.isEmpty) {
-                   _handleError("没有找到可用的 720p 源");
-                } else {
-                  // 取最高质量的混合流 (通常是 720p)
+                if (playbackOptions.isNotEmpty) {
                   var stableVideo = playbackOptions.first; 
                   Navigator.push(context, MaterialPageRoute(builder: (_) => VideoPlayerScreen(
-                    videoUrl: stableVideo.url.toString(),
-                    audioUrl: null, // 🔥 传入 null，告诉播放器这是单流，不需要处理音频
+                    videoInput: stableVideo.url.toString(), // 传入 URL
                     title: _videoInfo!.title,
+                    isCloudMode: false, // 普通模式
                   )));
                 }
               },
             ),
 
-            // 🟡 选项 2: 原画播放 (4K/2K 音画分离) - 配合 VideoPlayerScreen 的满血配置
-            if (downloadOptions.isNotEmpty)
-              ListTile(
-                leading: const Icon(Icons.high_quality, color: Colors.amber, size: 28),
-                title: const Text("原画播放 (4K / 2K)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                subtitle: Text("尝试播放 ${downloadOptions.first.videoQuality.name} • 需强力网络", style: const TextStyle(color: Colors.grey, fontSize: 12)),
-                trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  // 取最高画质的分离流
-                  var bestVideo = downloadOptions.first; 
-                  
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => VideoPlayerScreen(
-                    videoUrl: bestVideo.url.toString(),
-                    // 🔥 关键点：必须传入 audioStream 的 URL！
-                    // 这样播放器才能开启 "双流拼接" 模式，实现 4K 有声播放
-                    audioUrl: audioStream.url.toString(), 
-                    title: _videoInfo!.title,
-                  )));
-                },
-              ),
+            // ☁️ 选项 2: 云端 4K 影院 (服务器转码)
+            ListTile(
+              leading: const Icon(Icons.cloud_circle, color: Colors.amber, size: 30),
+              title: const Text("云端 4K 影院 (推荐)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              subtitle: const Text("私有服务器转码 • 满速 4K • 不卡顿", style: TextStyle(color: Colors.grey, fontSize: 12)),
+              trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
+              onTap: () {
+                Navigator.pop(ctx);
+                // 🔥 关键修改：传入 Video ID，而不是 URL
+                // 这样播放器就知道去请求你的服务器了
+                Navigator.push(context, MaterialPageRoute(builder: (_) => VideoPlayerScreen(
+                  videoInput: _videoInfo!.id.value, // 传入 ID (例如 dQw4w9WgXcQ)
+                  title: _videoInfo!.title,
+                  isCloudMode: true, // 开启云端模式
+                )));
+              },
+            ),
 
-            // 🔵 选项 3: DeepSeek 字幕翻译
+            // 🔵 选项 3: DeepSeek 翻译
             ListTile(
               leading: const Icon(Icons.auto_awesome, color: Color(0xFF4D88FF), size: 24),
               title: const Text("DeepSeek 字幕翻译", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              subtitle: const Text("AI 语境翻译 • 导出 SRT", style: TextStyle(color: Colors.grey, fontSize: 12)),
-              trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
+              subtitle: const Text("AI 语境翻译", style: TextStyle(color: Colors.grey, fontSize: 12)),
               onTap: () async {
                 Navigator.pop(ctx);
                 _triggerDeepSeekTranslation();
@@ -204,10 +175,9 @@ class _HomeScreenState extends State<HomeScreen> {
               padding: EdgeInsets.only(left: 16, top: 8, bottom: 8),
               child: Align(
                 alignment: Alignment.centerLeft,
-                child: Text("下载到相册 (3线程加速)", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                child: Text("下载到相册", style: TextStyle(color: Colors.grey, fontSize: 12)),
               ),
             ),
-
             Expanded(
               child: ListView.builder(
                 itemCount: downloadOptions.length,
@@ -219,7 +189,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   return ListTile(
                     leading: Icon(Icons.download, color: is4K ? Colors.purpleAccent : Colors.red),
                     title: Text(stream.videoQuality.name, style: const TextStyle(color: Colors.white)),
-                    subtitle: Text("${stream.container.name.toUpperCase()} • 约 $sizeMB MB", style: const TextStyle(color: Colors.grey)),
+                    subtitle: Text("${stream.container.name.toUpperCase()} • $sizeMB MB", style: const TextStyle(color: Colors.grey)),
                     onTap: () {
                       Navigator.pop(ctx);
                       _triggerDownload(stream, audioStream);
@@ -234,95 +204,39 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // 4. 触发下载逻辑
-  // ---------------------------------------------------------------------------
   Future<void> _triggerDownload(VideoStreamInfo videoStream, AudioStreamInfo audioStream) async {
-    setState(() {
-      _isBusy = true;
-      _progress = 0.0;
-      _statusText = "准备下载...";
-    });
-
+    setState(() { _isBusy = true; _progress = 0.0; _statusText = "准备下载..."; });
     try {
       await _downloadService.downloadAndMerge(
         video: _videoInfo!,
         videoStream: videoStream,
         audioStream: audioStream,
         onProgress: (status, progress) {
-          if (mounted) {
-            setState(() {
-              _statusText = status;
-              _progress = progress;
-            });
-          }
+          if (mounted) setState(() { _statusText = status; _progress = progress; });
         },
       );
-    } catch (e) {
-      _handleError(e.toString());
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isBusy = false;
-          // 如果成功，保留最后一句话提示
-          if (_progress < 1.0) _statusText = ""; 
-        });
-      }
-    }
+    } catch (e) { _handleError(e.toString()); } 
+    finally { if (mounted) setState(() { _isBusy = false; if(_progress < 1) _statusText = ""; }); }
   }
 
-  // ---------------------------------------------------------------------------
-  // 5. 触发 DeepSeek 翻译逻辑
-  // ---------------------------------------------------------------------------
   Future<void> _triggerDeepSeekTranslation() async {
     final prefs = await SharedPreferences.getInstance();
     final apiKey = prefs.getString('deepseek_key');
-    
-    if (apiKey == null || apiKey.isEmpty) {
-      _handleError("请先去个人中心设置 DeepSeek API Key");
-      return;
-    }
-
-    setState(() {
-      _isBusy = true;
-      _progress = 0.0;
-      _statusText = "准备 AI 翻译...";
-    });
-
+    if (apiKey == null || apiKey.isEmpty) { _handleError("请设置 API Key"); return; }
+    setState(() { _isBusy = true; _progress = 0.0; _statusText = "准备翻译..."; });
     try {
       await _downloadService.exportDeepSeekSubtitle(
-        video: _videoInfo!,
-        apiKey: apiKey,
-        onProgress: (status, progress) {
-          if (mounted) {
-            setState(() {
-              _statusText = status;
-              _progress = progress;
-            });
-          }
-        },
+        video: _videoInfo!, apiKey: apiKey,
+        onProgress: (status, progress) { if (mounted) setState(() { _statusText = status; _progress = progress; }); }
       );
-    } catch (e) {
-      _handleError(e.toString());
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isBusy = false;
-          if (_progress < 1.0) _statusText = "";
-        });
-      }
-    }
+    } catch (e) { _handleError(e.toString()); }
+    finally { if (mounted) setState(() { _isBusy = false; if(_progress < 1) _statusText = ""; }); }
   }
 
   void _handleError(String msg) {
     if (!mounted) return;
-    setState(() {
-      _isBusy = false;
-      _statusText = "";
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), backgroundColor: Colors.redAccent),
-    );
+    setState(() { _isBusy = false; _statusText = ""; });
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.redAccent));
   }
 
   @override
@@ -332,104 +246,42 @@ class _HomeScreenState extends State<HomeScreen> {
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 1. 输入框区域
             Card(
-              elevation: 4,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              elevation: 4, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Row(
                   children: [
                     const Icon(Icons.link, color: Colors.grey),
                     const SizedBox(width: 10),
-                    Expanded(
-                      child: TextField(
-                        controller: _urlController,
-                        decoration: const InputDecoration(hintText: "粘贴 YouTube 链接", border: InputBorder.none),
-                        onSubmitted: (_) => analyzeVideo(),
-                      ),
-                    ),
+                    Expanded(child: TextField(controller: _urlController, decoration: const InputDecoration(hintText: "粘贴链接", border: InputBorder.none), onSubmitted: (_) => analyzeVideo())),
                     IconButton(icon: const Icon(Icons.arrow_forward_ios_rounded, size: 18), onPressed: analyzeVideo)
                   ],
                 ),
               ),
             ),
             const SizedBox(height: 24),
-
-            // 2. 视频信息卡片 (解析成功后显示)
             if (_videoInfo != null) ...[
               Card(
-                clipBehavior: Clip.antiAlias,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                clipBehavior: Clip.antiAlias, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                 child: Column(
                   children: [
-                    CachedNetworkImage(
-                      imageUrl: _videoInfo!.thumbnails.highResUrl,
-                      height: 200, width: double.infinity, fit: BoxFit.cover,
-                      placeholder: (_,__) => Container(color: Colors.grey[800], height: 200),
-                    ),
+                    CachedNetworkImage(imageUrl: _videoInfo!.thumbnails.highResUrl, height: 200, width: double.infinity, fit: BoxFit.cover),
                     Padding(
                       padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(_videoInfo!.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold), maxLines: 2, overflow: TextOverflow.ellipsis),
-                          const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              const Icon(Icons.timer, size: 14, color: Colors.grey),
-                              Text(" ${_videoInfo!.duration?.inMinutes ?? 0} 分钟", style: const TextStyle(color: Colors.grey)),
-                              const Spacer(),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                decoration: BoxDecoration(color: const Color(0xFF4D88FF), borderRadius: BorderRadius.circular(4)),
-                                child: const Text("Ready", style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
-                              )
-                            ],
-                          ),
-                        ],
-                      ),
+                      child: Text(_videoInfo!.title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold), maxLines: 2),
                     ),
                   ],
                 ),
               ),
               const SizedBox(height: 24),
-
-              // 3. 进度条或大按钮
               if (_isBusy) ...[
-                Column(
-                  children: [
-                    LinearProgressIndicator(value: _progress > 0 ? _progress : null, minHeight: 8, borderRadius: BorderRadius.circular(4), color: const Color(0xFF4D88FF)),
-                    const SizedBox(height: 10),
-                    Text(_statusText, style: const TextStyle(color: Colors.grey))
-                  ],
-                )
+                LinearProgressIndicator(value: _progress > 0 ? _progress : null),
+                const SizedBox(height: 10),
+                Text(_statusText, style: const TextStyle(color: Colors.grey))
               ] else
-                SizedBox(
-                  height: 50,
-                  child: ElevatedButton(
-                    onPressed: prepareResource,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF4D88FF),
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      elevation: 4,
-                    ),
-                    child: const Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.play_circle_filled_rounded),
-                        SizedBox(width: 8),
-                        Text("播放 / 下载 / 翻译", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                      ],
-                    ),
-                  ),
-                ),
-            ] else ...[
-               // 4. 空状态提示
-               Center(child: Column(children: [const SizedBox(height: 40), Icon(Icons.ondemand_video, size: 80, color: Colors.grey.withOpacity(0.3)), const SizedBox(height: 10), Text("MediaKit 4K 播放 • DeepSeek 翻译", style: TextStyle(color: Colors.grey.withOpacity(0.5)))]))
+                SizedBox(height: 50, child: ElevatedButton(onPressed: prepareResource, style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4D88FF), foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))), child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(Icons.play_circle_filled_rounded), SizedBox(width: 8), Text("开始操作", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))]))),
             ]
           ],
         ),
