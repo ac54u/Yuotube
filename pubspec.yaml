@@ -1,0 +1,70 @@
+name: flutter_application_youtube
+description: A new Flutter project.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.1.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # ------------------------------------------------
+  # 🔥 核心业务库
+  # ------------------------------------------------
+  
+  # YouTube 解析 (使用最新版以修复 XML 字幕解析报错)
+  youtube_explode_dart: ^2.2.3
+  
+  # 视频转码 (4K 合成核心，使用社区修复版)
+  ffmpeg_kit_flutter_new: ^4.1.0
+  
+  # AI 翻译 (用于辅助 DeepSeek 字幕处理)
+  translator: ^1.0.0
+
+  # ------------------------------------------------
+  # 🎬 播放器引擎 (MediaKit - 支持 4K 音画分离)
+  # ------------------------------------------------
+  media_kit: ^1.1.10
+  media_kit_video: ^1.2.4
+  media_kit_libs_video: ^1.0.4  # 包含 iOS/Android 原生内核
+  
+  # 屏幕常亮 (防止播放时锁屏)
+  wakelock_plus: ^1.2.0
+
+  # ------------------------------------------------
+  # 🛠️ 系统能力 & 工具
+  # ------------------------------------------------
+  
+  # 权限管理 (相册、网络)
+  permission_handler: ^11.3.1
+  
+  # 保存到相册
+  gal: ^2.3.2
+  
+  # 文件分享/导出
+  share_plus: ^10.0.0
+  
+  # 选择头像/图片
+  image_picker: ^1.0.7
+  
+  # 本地存储 (保存 API Key 等设置)
+  shared_preferences: ^2.2.2
+  
+  # 网络请求 (获取 IP、调用 DeepSeek API)
+  http: ^1.2.0
+  
+  # 图片缓存 (视频封面加载)
+  cached_network_image: ^3.4.1
+
+  # 图标库
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
