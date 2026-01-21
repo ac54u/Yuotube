@@ -20,40 +20,40 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   
   bool _isLoginMode = false;
 
-  // 🖥️ 身份：使用最新的 macOS Safari UA (为了兼容性和 VP9)
-  final String _desktopUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15";
+  // 🖥️ Windows Chrome UA：这是 YouTube 4K 的亲爹
+  // 只有用这个身份，YouTube 才会愿意下发 VP9 编码
+  final String _windowsUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+  
   final String _mobileUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1";
 
-  // ☢️ 核弹脚本：Codec 欺骗 + 5K 分辨率
-  final String _godModeScript = """
-    console.log("☢️ God Mode Loaded");
+  // ☢️ 核弹脚本：欺骗 MSE 能力
+  final String _vp9EnforcerScript = """
+    console.log("☢️ VP9 Enforcer Loaded");
 
-    // 1. 【核心突破】篡改 MSE 能力检测
-    // 强制告诉 YouTube：我们支持 VP9 (4K 编码)，即使 iOS 说不支持
+    // 1. 【核心】篡改 MediaSource 能力检测
+    // 这是最关键的一步！不管 iOS 说支不支持，我们统统返回 True！
     try {
         if (window.MediaSource) {
-            var originalIsTypeSupported = window.MediaSource.isTypeSupported;
+            var realSupport = window.MediaSource.isTypeSupported;
             window.MediaSource.isTypeSupported = function(mime) {
-                // 只要问到 vp9 或 av01，统统回答 true
+                // 只要问到 vp9 或 av1，就撒谎说支持
                 if (mime && (mime.includes('vp9') || mime.includes('vp09') || mime.includes('av01'))) {
-                    console.log("😈 Lying about codec support: " + mime);
+                    console.log("😈 Lying about VP9 support for: " + mime);
                     return true;
                 }
-                return originalIsTypeSupported.call(this, mime);
+                // 正常的 mp4/h264 还是走系统检测
+                return realSupport.call(this, mime);
             };
         }
-    } catch(e) { console.log(e); }
+    } catch(e) {}
 
-    // 2. 【5K 屏幕伪装】
-    // 既然要骗，就骗大点。伪装成 5K iMac。
+    // 2. 【身份伪装】彻底伪装成 Windows PC
     try {
-        Object.defineProperty(window.screen, 'width', { get: () => 5120 });
-        Object.defineProperty(window.screen, 'height', { get: () => 2880 });
-        Object.defineProperty(window, 'availWidth', { get: () => 5120 });
-        Object.defineProperty(window, 'availHeight', { get: () => 2880 });
-        Object.defineProperty(window, 'devicePixelRatio', { get: () => 2.0 });
-        Object.defineProperty(window, 'innerWidth', { get: () => 2560 });
-        Object.defineProperty(window, 'innerHeight', { get: () => 1440 });
+        Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+        Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 }); // 假装是鼠标
+        Object.defineProperty(window.screen, 'width', { get: () => 3840 });
+        Object.defineProperty(window.screen, 'height', { get: () => 2160 });
+        Object.defineProperty(window, 'devicePixelRatio', { get: () => 1.5 }); // Windows 常见的 DPI
     } catch(e) {}
 
     // 3. 【防黑屏 & 强制内联】
@@ -74,7 +74,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
     var meta = document.querySelector('meta[name="viewport"]');
     if (!meta) { meta = document.createElement('meta'); document.head.appendChild(meta); }
     meta.name = 'viewport';
-    meta.content = 'width=1920, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes';
+    meta.content = 'width=1920, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
 
     // 5. 【UI 净化】
     var style = document.createElement('style');
@@ -92,6 +92,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
         var player = document.getElementById('movie_player');
         if (player && player.setPlaybackQualityRange) {
             console.log("🚀 Force command: " + quality);
+            // 暴力清空 buffer，强制重载流
             player.setPlaybackQualityRange(quality, quality);
             player.setPlaybackQuality(quality);
         }
@@ -126,7 +127,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   Future<void> _switchMode(bool loginMode) async {
     setState(() { _isLoading = true; _isLoginMode = loginMode; });
     await webViewController?.setSettings(settings: InAppWebViewSettings(
-      userAgent: loginMode ? _mobileUA : _desktopUA,
+      userAgent: loginMode ? _mobileUA : _windowsUA,
       preferredContentMode: loginMode ? UserPreferredContentMode.MOBILE : UserPreferredContentMode.DESKTOP,
       useWideViewPort: !loginMode,
       loadWithOverviewMode: !loginMode,
@@ -144,11 +145,11 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text("强制 VP9 解码 (实验性)", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+            const Text("VP9 强开模式", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
             const SizedBox(height: 10),
-            Text("尝试强制请求 4K 流。如果黑屏，说明手机硬件不支持硬解。", style: TextStyle(color: Colors.grey[400], fontSize: 12)),
+            Text("只有 VP9 编码才有 4K。已强制注入解码支持。", style: TextStyle(color: Colors.grey[400], fontSize: 12)),
             const Divider(color: Colors.white10),
-            _buildQualityOption("🚀 4K (2160p)", "highres"),
+            _buildQualityOption("🚀 4K (2160p)", "highres"), // highres 是 4K+ 的代号
             _buildQualityOption("📺 2K (1440p)", "hd1440"),
             _buildQualityOption("💿 1080p", "hd1080"),
           ],
@@ -159,11 +160,12 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
 
   Widget _buildQualityOption(String label, String code) {
     return ListTile(
-      leading: const Icon(Icons.high_quality, color: Colors.purpleAccent),
+      leading: const Icon(Icons.bolt, color: Colors.orangeAccent),
       title: Text(label, style: const TextStyle(color: Colors.white)),
       onTap: () {
         Navigator.pop(context);
         webViewController?.evaluateJavascript(source: "window.forceQuality('$code');");
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("正在暴力请求 $label...")));
       },
     );
   }
@@ -177,23 +179,23 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
           InAppWebView(
             initialUrlRequest: URLRequest(url: WebUri("https://www.youtube.com/watch?v=${widget.videoId}")),
             initialUserScripts: UnmodifiableListView<UserScript>([
-              UserScript(source: _godModeScript, injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START, forMainFrameOnly: true),
+              UserScript(source: _vp9EnforcerScript, injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START, forMainFrameOnly: true),
             ]),
             initialSettings: InAppWebViewSettings(
-              userAgent: _desktopUA,
+              // 🔥 关键：使用 Windows UA 才能骗到 VP9
+              userAgent: _windowsUA,
               preferredContentMode: UserPreferredContentMode.DESKTOP,
-              allowsInlineMediaPlayback: true,
+              allowsInlineMediaPlayback: true, 
               mediaPlaybackRequiresUserGesture: false,
               useWideViewPort: true,
               loadWithOverviewMode: true,
               isInspectable: true,
               supportZoom: true,
-              // 🔥 尝试开启混合合成，提升渲染兼容性
-              useHybridComposition: true,
+              useHybridComposition: true, // 增强兼容性
             ),
             onWebViewCreated: (controller) => webViewController = controller,
             onLoadStop: (controller, url) async {
-              await controller.evaluateJavascript(source: _godModeScript);
+              await controller.evaluateJavascript(source: _vp9EnforcerScript);
               if (mounted) setState(() => _isLoading = false);
             },
           ),
@@ -224,23 +226,24 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                                Text(_isLoginMode ? "Login Mode" : "VP9 Injector", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-                                Text(_isLoginMode ? "登录完成后切回" : "伪装 5K iMac • 强开 Codec", style: TextStyle(color: _isLoginMode ? Colors.amber : Colors.purpleAccent, fontSize: 10))
+                                Text(_isLoginMode ? "Login Mode" : "Windows 10 Chrome", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                                Text(_isLoginMode ? "完成登录后切回" : "VP9 解码已注入", style: TextStyle(color: _isLoginMode ? Colors.amber : Colors.orangeAccent, fontSize: 10))
                             ]
                         ),
                         const Spacer(),
                         
                         if (!_isLoginMode)
                           ElevatedButton.icon(
-                            icon: const Icon(Icons.bolt, size: 14),
+                            icon: const Icon(Icons.high_quality, size: 14),
                             label: const Text("强开4K"),
-                            style: ElevatedButton.styleFrom(backgroundColor: Colors.purple, foregroundColor: Colors.white),
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange, foregroundColor: Colors.white),
                             onPressed: _showQualitySheet,
                           ),
                         
                         const SizedBox(width: 8),
                         IconButton(
                           icon: Icon(_isLoginMode ? Icons.movie : Icons.login, color: Colors.white70),
+                          tooltip: _isLoginMode ? "切回看片" : "去登录",
                           onPressed: () => _switchMode(!_isLoginMode),
                         ),
                       ],
