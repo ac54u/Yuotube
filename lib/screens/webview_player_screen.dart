@@ -18,45 +18,69 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   bool _showControls = false;
   Timer? _hideTimer;
   
-  // 当前模式标记
+  // 默认为桌面模式 (为了画质)
   bool _isDesktopMode = true; 
 
-  // 🖥️ 桌面身份 (解锁 4K)
+  // 🖥️ 桌面身份 (Windows Chrome - 解锁 4K 的关键)
   final String _desktopUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
-  // 📱 手机身份 (用于登录)
-  final String _mobileUA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36";
+  // 📱 手机身份 (仅用于登录)
+  final String _mobileUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1";
 
-  // 🔥 画面适配 + 4K 解锁脚本
+  // 🔥 核心修复脚本：
+  // 1. 欺骗分辨率
+  // 2. 移除原生全屏干扰
+  // 3. 暴力设置画质
   final String _fixScript = """
-    // 1. 强制铺满全屏，修复黑边/白边
-    var style = document.createElement('style');
-    style.innerHTML = `
-      body, html, ytd-app { background: #000 !important; width: 100vw !important; height: 100vh !important; overflow: hidden !important; margin: 0 !important; }
-      #masthead-container, #secondary, #below, #comments, #related { display: none !important; }
-      .ytp-chrome-top, .ytp-show-cards-title { display: none !important; }
-      
-      /* 强制播放器居中且覆盖全屏 */
-      #player { position: fixed !important; top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important; z-index: 1 !important; }
-      video { object-fit: contain !important; width: 100% !important; height: 100% !important; }
-    `;
-    document.head.appendChild(style);
+    // A. 视口欺骗 (让 YouTube 以为是 1080p 显示器)
+    var meta = document.querySelector('meta[name="viewport"]');
+    if (!meta) {
+        meta = document.createElement('meta');
+        meta.name = 'viewport';
+        document.head.appendChild(meta);
+    }
+    meta.content = 'width=1920, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
 
-    // 2. 欺骗 YouTube 我是大屏幕 (解锁 4K 选项的关键)
+    // B. 屏幕参数欺骗
     try {
-        Object.defineProperty(window.screen, 'width', { get: () => 3840 });
-        Object.defineProperty(window.screen, 'height', { get: () => 2160 });
+        Object.defineProperty(window.screen, 'width', { get: () => 1920 });
+        Object.defineProperty(window.screen, 'height', { get: () => 1080 });
+        Object.defineProperty(window, 'availWidth', { get: () => 1920 });
+        Object.defineProperty(window, 'availHeight', { get: () => 1080 });
         Object.defineProperty(window, 'devicePixelRatio', { get: () => 2.0 });
     } catch(e) {}
 
-    // 3. 自动切画质
+    // C. 样式修正 (修复黑屏/白边)
+    var style = document.createElement('style');
+    style.innerHTML = `
+      /* 强制背景纯黑 */
+      body, html, ytd-app { background-color: #000 !important; width: 100vw !important; height: 100vh !important; overflow: hidden !important; }
+      
+      /* 隐藏干扰元素 */
+      #masthead-container, #secondary, #below, #comments, #related, .ytp-chrome-top { display: none !important; }
+      
+      /* 强制播放器铺满，禁止原生全屏接管 */
+      #player { position: fixed !important; top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important; z-index: 1 !important; }
+      video { object-fit: contain !important; width: 100% !important; height: 100% !important; }
+      
+      /* 隐藏全屏按钮 (防止误触导致系统黑屏) */
+      .ytp-fullscreen-button { display: none !important; }
+    `;
+    document.head.appendChild(style);
+
+    // D. 画质轮询 (每2秒敲打一次)
     setInterval(() => {
         var player = document.getElementById('movie_player');
         if (player && player.setPlaybackQualityRange) {
-            player.setPlaybackQualityRange('highres', 'highres'); 
-            if(player.getPlaybackQuality() == 'small' || player.getPlaybackQuality() == 'medium') {
+            // 优先 4K, 其次 1080p
+            player.setPlaybackQualityRange('highres', 'highres');
+            var q = player.getPlaybackQuality();
+            if(q == 'small' || q == 'medium' || q == 'large') {
                 player.setPlaybackQuality('hd1080');
             }
         }
+        // 尝试自动播放
+        var video = document.querySelector('video');
+        if(video && video.paused) video.play();
     }, 2000);
   """;
 
@@ -85,19 +109,26 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
     }
   }
 
-  // 🔥 核心功能：手动切换 电脑/手机 模式
+  // 切换模式 (核心防黑屏逻辑)
   Future<void> _switchMode(bool toDesktop) async {
     setState(() => _isLoading = true);
     _isDesktopMode = toDesktop;
     
+    // 强制清理缓存，防止旧的移动版页面残留导致黑屏
+    if (toDesktop) {
+      await webViewController?.clearCache();
+    }
+
     await webViewController?.setSettings(settings: InAppWebViewSettings(
       userAgent: toDesktop ? _desktopUA : _mobileUA,
       preferredContentMode: toDesktop ? UserPreferredContentMode.DESKTOP : UserPreferredContentMode.MOBILE,
-      useWideViewPort: toDesktop, // 电脑模式开启宽屏
+      useWideViewPort: toDesktop,
       loadWithOverviewMode: toDesktop,
+      allowsInlineMediaPlayback: true, // 🔥 关键：禁止原生全屏
     ));
     
-    webViewController?.reload();
+    // 重新加载 URL 而不是 reload，确保 Headers 生效
+    webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri("https://www.youtube.com/watch?v=${widget.videoId}")));
   }
 
   @override
@@ -114,25 +145,29 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
               UserScript(source: _fixScript, injectionTime: UserScriptInjectionTime.AT_DOCUMENT_END, forMainFrameOnly: true),
             ]),
             initialSettings: InAppWebViewSettings(
-              preferredContentMode: UserPreferredContentMode.DESKTOP, // 默认尝试桌面
+              // 🔥 默认桌面模式
+              preferredContentMode: UserPreferredContentMode.DESKTOP,
               userAgent: _desktopUA,
-              allowsInlineMediaPlayback: true,
+              
+              // 🔥 iOS 防黑屏关键设置
+              allowsInlineMediaPlayback: true, // 必须为 true
+              allowsAirPlayForMediaPlayback: false,
+              allowsPictureInPictureMediaPlayback: false, // 关闭画中画防止冲突
+              
               mediaPlaybackRequiresUserGesture: false,
               useWideViewPort: true,
               loadWithOverviewMode: true,
               isInspectable: true,
-              supportZoom: true, // 允许手势缩放以适应屏幕
+              supportZoom: true,
             ),
             
             onWebViewCreated: (controller) => webViewController = controller,
 
-            // 智能检测：如果掉到了登录页，自动切手机模式方便输入
+            // 自动检测登录页
             onLoadStart: (controller, url) async {
               String urlStr = url.toString();
               if (urlStr.contains("accounts.google.com") && _isDesktopMode) {
-                print("自动切换到手机模式以允许登录...");
-                // 不要自动 setState 刷新 UI，只改内核
-                 _switchMode(false); 
+                 _switchMode(false); // 自动切手机模式登录
               }
             },
 
@@ -168,25 +203,37 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                                Text(_isDesktopMode ? "4K Desktop Mode" : "Login/Mobile Mode", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-                                Text(_isDesktopMode ? "已伪装成电脑 • 画质解锁" : "已伪装成手机 • 仅限登录", style: TextStyle(color: _isDesktopMode ? Colors.greenAccent : Colors.amber, fontSize: 10))
+                                Text(_isDesktopMode ? "4K Desktop" : "Login Mode", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                                Text(_isDesktopMode ? "防黑屏增强版" : "请登录", style: TextStyle(color: _isDesktopMode ? Colors.greenAccent : Colors.amber, fontSize: 10))
                             ]
                         ),
                         const Spacer(),
                         
-                        // 🔥 模式切换按钮
-                        TextButton.icon(
-                            icon: Icon(_isDesktopMode ? Icons.phone_android : Icons.desktop_windows, size: 16, color: Colors.white),
-                            label: Text(_isDesktopMode ? "切手机(登录用)" : "切电脑(看4K)", style: const TextStyle(color: Colors.white)),
-                            style: TextButton.styleFrom(backgroundColor: Colors.blueAccent.withOpacity(0.4)),
-                            onPressed: () => _switchMode(!_isDesktopMode),
+                        // 登录切换
+                        if (!_isDesktopMode)
+                        ElevatedButton(
+                            child: const Text("切回4K模式"),
+                            onPressed: () => _switchMode(true),
+                        ),
+
+                        const SizedBox(width: 8),
+                        
+                        // 🔥 救砖按钮：重置内核 (黑屏点这个)
+                        IconButton(
+                          icon: const Icon(Icons.cleaning_services, color: Colors.redAccent),
+                          tooltip: "黑屏修复",
+                          onPressed: () {
+                            setState(() => _isLoading = true);
+                            // 强制清除所有缓存并重载
+                            webViewController?.clearCache();
+                            webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri("https://www.youtube.com/watch?v=${widget.videoId}")));
+                          },
                         ),
                         
-                        const SizedBox(width: 8),
+                        // 普通刷新
                         IconButton(
                           icon: const Icon(Icons.refresh, color: Colors.white70),
                           onPressed: () {
-                            setState(() => _isLoading = true);
                             webViewController?.reload();
                           },
                         ),
