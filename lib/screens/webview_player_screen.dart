@@ -21,70 +21,67 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
   // 状态：是否为登录模式
   bool _isLoginMode = false;
 
-  // 🖥️ 桌面身份 (Mac Safari - 这是解锁 4K 且不黑屏的最佳选择)
-  // Windows Chrome 有时会触发 Google 的安全警报，Mac Safari 在 iPhone 上更“原生”
-  final String _desktopUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15";
+  // 🖥️ Windows Chrome (这是拥有最全画质菜单的身份)
+  final String _desktopUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
   
   // 📱 手机身份 (仅用于登录)
   final String _mobileUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1";
 
-  // ☢️ 核弹级修复脚本
-  final String _nuclearFixScript = """
-    console.log("☢️ Nuclear Fix Loaded");
+  // ☢️ 核心脚本：解锁菜单 + 强制 4K
+  final String _unlockMenuScript = """
+    console.log("☢️ Menu Unlock Loaded");
 
-    // 1. 【防黑屏绝杀】MutationObserver 实时监控
-    // 只要视频标签出现，立刻打上“禁止全屏”的钢印
+    // 1. 【伪装鼠标设备】
+    // 关键！告诉 YouTube 我没有触摸屏， forcing it to render the Desktop Menu (small popup)
+    try {
+        Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
+        Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+    } catch(e) {}
+
+    // 2. 【防黑屏 & 强制内联】
     var observer = new MutationObserver(function(mutations) {
         var videos = document.querySelectorAll('video');
         videos.forEach(function(video) {
-            // 强制内联
             if (!video.hasAttribute('playsinline')) {
                 video.setAttribute('playsinline', 'true');
                 video.setAttribute('webkit-playsinline', 'true');
-                console.log("🔒 Video locked to inline");
             }
-            // 修复黑屏：强制可见性
-            video.style.visibility = 'visible';
-            video.style.opacity = '1';
-            video.style.display = 'block';
         });
     });
     observer.observe(document.documentElement, { childList: true, subtree: true });
 
-    // 2. 【4K 视口欺骗】
-    // 告诉 YouTube 这是一个 1920x1080 的显示器
+    // 3. 【视口欺骗】(让菜单以为屏幕很大)
     var meta = document.querySelector('meta[name="viewport"]');
     if (!meta) { meta = document.createElement('meta'); document.head.appendChild(meta); }
     meta.name = 'viewport';
-    meta.content = 'width=1920, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes';
+    meta.content = 'width=1920, initial-scale=1.0, maximum-scale=1.0, user-scalable=no';
 
-    // 3. 【画质暴力轮询】
+    // 4. 【画质菜单解锁】
+    // 强制开启 MSE (Media Source Extensions) 支持，这是 4K 的基础
+    if (!window.MediaSource) { console.log("⚠️ MSE not supported by iOS WebKit, relying on native HLS"); }
+
+    // 5. 【后台暴力提画质】
+    // 既然菜单可能显示不全，我们在后台帮你选
     setInterval(() => {
         var player = document.getElementById('movie_player');
         if (player && player.setPlaybackQualityRange) {
-             // 只有当画质极低（360p/240p）时才干预，防止打断用户
-             var q = player.getPlaybackQuality();
-             if(q === 'small' || q === 'medium' || q === 'tiny') {
-                 player.setPlaybackQualityRange('highres', 'highres');
-                 console.log("⚡ Upgrading quality from " + q);
-             }
+             // 强制设置最高画质，不管菜单显示什么
+             player.setPlaybackQualityRange('highres', 'highres');
+             player.setPlaybackQuality('hd2160');
+             player.setPlaybackQuality('hd1440');
+             player.setPlaybackQuality('hd1080');
         }
-    }, 3000);
+    }, 2000);
 
-    // 4. 【UI 深度净化】
+    // 6. 【UI 净化】
     var style = document.createElement('style');
     style.innerHTML = `
-      /* 背景纯黑 */
       body, html, ytd-app { background: #000 !important; width: 100vw !important; height: 100vh !important; overflow: hidden !important; }
+      #masthead-container, #secondary, #comments, #related, .ytp-chrome-top { display: none !important; }
       
-      /* 隐藏所有干扰 */
-      #masthead-container, #secondary, #comments, #related, ytd-merch-shelf-renderer { display: none !important; }
-      .ytp-chrome-top { display: none !important; }
-      
-      /* 🔥 彻底干掉全屏按钮 - 防止误触触发系统黑屏 */
+      /* 隐藏全屏按钮 */
       .ytp-fullscreen-button { display: none !important; }
       
-      /* 播放器强制铺满 */
       #player { position: fixed !important; top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important; z-index: 1 !important; }
       video { object-fit: contain !important; }
     `;
@@ -116,23 +113,17 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
     }
   }
 
-  // 切换模式 (登录 vs 看片)
   Future<void> _switchMode(bool loginMode) async {
-    setState(() {
-      _isLoading = true;
-      _isLoginMode = loginMode;
-    });
+    setState(() { _isLoading = true; _isLoginMode = loginMode; });
 
-    // 切换 UA 和 视口模式
     await webViewController?.setSettings(settings: InAppWebViewSettings(
       userAgent: loginMode ? _mobileUA : _desktopUA,
       preferredContentMode: loginMode ? UserPreferredContentMode.MOBILE : UserPreferredContentMode.DESKTOP,
-      useWideViewPort: !loginMode, // 桌面模式开启宽视口
+      useWideViewPort: !loginMode,
       loadWithOverviewMode: !loginMode,
-      allowsInlineMediaPlayback: true, // 始终开启防劫持
+      allowsInlineMediaPlayback: true,
     ));
 
-    // 登录模式跳转登录页，看片模式跳转视频页
     if (loginMode) {
       webViewController?.loadUrl(urlRequest: URLRequest(url: WebUri("https://accounts.google.com/ServiceLogin?service=youtube")));
     } else {
@@ -152,17 +143,16 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
             ),
             initialUserScripts: UnmodifiableListView<UserScript>([
               UserScript(
-                source: _nuclearFixScript,
+                source: _unlockMenuScript,
                 injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
                 forMainFrameOnly: true,
               ),
             ]),
             initialSettings: InAppWebViewSettings(
-              // 🔥 默认为桌面模式 (这是 4K 的前提)
+              // 🔥 这里的关键是 Windows UA + DESKTOP 模式
               userAgent: _desktopUA,
               preferredContentMode: UserPreferredContentMode.DESKTOP,
               
-              // 🔥 核心防黑屏配置
               allowsInlineMediaPlayback: true,
               allowsAirPlayForMediaPlayback: false,
               allowsPictureInPictureMediaPlayback: false,
@@ -175,8 +165,7 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
             ),
             onWebViewCreated: (controller) => webViewController = controller,
             onLoadStop: (controller, url) async {
-              // 二次注入确保生效
-              await controller.evaluateJavascript(source: _nuclearFixScript);
+              await controller.evaluateJavascript(source: _unlockMenuScript);
               if (mounted) setState(() => _isLoading = false);
             },
           ),
@@ -207,30 +196,24 @@ class _WebViewPlayerScreenState extends State<WebViewPlayerScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                                Text(_isLoginMode ? "Login Mode" : "Mac Desktop 4K", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-                                Text(_isLoginMode ? "请登录，完成后切回 4K" : "已伪装 Mac • 防黑屏", style: TextStyle(color: _isLoginMode ? Colors.amber : Colors.greenAccent, fontSize: 10))
+                                Text(_isLoginMode ? "Login Mode" : "Windows 4K", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                                Text(_isLoginMode ? "完成登录后切回" : "强制解锁菜单", style: TextStyle(color: _isLoginMode ? Colors.amber : Colors.greenAccent, fontSize: 10))
                             ]
                         ),
                         const Spacer(),
                         
-                        // 🔥 模式切换 (解决一切问题的钥匙)
+                        // 模式切换
                         ElevatedButton.icon(
                             icon: Icon(_isLoginMode ? Icons.movie : Icons.login, size: 14),
                             label: Text(_isLoginMode ? "切回看片" : "去登录"),
-                            style: ElevatedButton.styleFrom(
-                                backgroundColor: _isLoginMode ? Colors.green : Colors.blueAccent, 
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(horizontal: 12),
-                            ),
+                            style: ElevatedButton.styleFrom(backgroundColor: _isLoginMode ? Colors.green : Colors.blueAccent, foregroundColor: Colors.white),
                             onPressed: () => _switchMode(!_isLoginMode),
                         ),
 
                         const SizedBox(width: 8),
                         IconButton(
                           icon: const Icon(Icons.refresh, color: Colors.white70),
-                          onPressed: () {
-                             webViewController?.reload();
-                          },
+                          onPressed: () { webViewController?.reload(); },
                         ),
                       ],
                     ),
