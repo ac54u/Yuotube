@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-// 🔥 1. 使用 'as yt' 解决 Video 类的命名冲突
+// 使用别名解决命名冲突
 import 'package:youtube_explode_dart/youtube_explode_dart.dart' as yt;
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -21,11 +21,13 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
   bool _isLoading = true;
   String _statusText = "初始化引擎...";
   String _debugInfo = "";
+  
+  // 🔥 关键：定义一个与之前伪装一致的 UserAgent
+  final String _userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15";
 
   @override
   void initState() {
     super.initState();
-    // 强制横屏体验
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeRight,
       DeviceOrientation.landscapeLeft
@@ -36,9 +38,16 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
   }
 
   Future<void> _initPlayer() async {
-    // 创建播放器实例
+    // 配置 MPV 底层参数
+    // 🔥 修复：移除了不支持的 iosAudioSessionCategory 参数
     player = Player();
-    controller = VideoController(player);
+    
+    controller = VideoController(
+      player,
+      configuration: const VideoControllerConfiguration(
+        enableHardwareAcceleration: true, // 开启硬解
+      ),
+    );
 
     try {
       await _loadVideoSource();
@@ -50,51 +59,63 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
   Future<void> _loadVideoSource() async {
     setState(() => _statusText = "正在解析 4K 资源...");
     
-    // 使用别名 yt 调用
     var explode = yt.YoutubeExplode();
     try {
       var manifest = await explode.videos.streamsClient.getManifest(widget.videoId);
       
-      // 1. 获取视频流 (2160p/4K)
+      // 1. 找 4K 视频流
       var videoStreams = manifest.video.toList();
       videoStreams.sort((a, b) => b.videoResolution.height.compareTo(a.videoResolution.height));
       var bestVideo = videoStreams.first;
       
-      // 2. 获取音频流 (最高音质)
+      // 2. 找最高音质
       var audioStreams = manifest.audio.toList();
       audioStreams.sort((a, b) => b.bitrate.compareTo(a.bitrate));
       var bestAudio = audioStreams.first;
 
       final videoUrl = bestVideo.url.toString();
       final audioUrl = bestAudio.url.toString();
+      
+      // 计算码率用于显示
+      final kbps = (bestAudio.bitrate.bitsPerSecond / 1000).ceil();
 
       if (mounted) {
-        // 🔥 2. 修复 kbit 报错：手动计算 kbps
-        final kbps = (bestAudio.bitrate.bitsPerSecond / 1000).ceil();
-        
         setState(() {
           _debugInfo = "画质: ${bestVideo.videoQuality} (${bestVideo.videoResolution})\n"
                        "编码: ${bestVideo.codec}\n"
-                       "音质: ${kbps} kbps (MPV合成)";
+                       "音质: ${kbps} kbps\n"
+                       "状态: 正在请求视频流..."; 
           _statusText = "缓冲中...";
         });
       }
 
-      // 🔥 3. 修复 audios 参数报错
-      // MediaKit 使用 extras 参数传递底层 MPV 指令
-      // 'audio-file' 是 MPV 用来加载外部音轨的参数
+      // 🔥 3. 核心修复：带 Headers 播放
+      // 如果不带 UA，YouTube 会返回 403 Forbidden，导致一直转圈
       await player.open(
         Media(
           videoUrl,
           extras: {
-            'audio-file': audioUrl, // 关键：告诉内核去哪里加载声音
+            // 加载外部音轨
+            'audio-file': audioUrl,
+            
+            // 伪装浏览器身份 (关键！)
+            'user-agent': _userAgent,
+            'http-header-fields': 'Referer: https://www.youtube.com/',
+            
+            // 性能优化参数
+            'demuxer-max-bytes': '32MiB', // 增大缓冲区
+            'network-timeout': '15', // 超时设定
+            'hwdec': 'auto', // 强制尝试硬解
           },
         ),
         play: true,
       );
 
       if (mounted) {
-        setState(() => _isLoading = false);
+        setState(() {
+          _isLoading = false;
+          _debugInfo += "\n✅ 连接成功";
+        });
       }
 
     } catch (e) {
@@ -107,7 +128,6 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
 
   @override
   void dispose() {
-    // 恢复竖屏
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     player.dispose();
@@ -121,7 +141,6 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
       body: Stack(
         alignment: Alignment.center,
         children: [
-          // 4. 这里的 Video 指的是 media_kit_video 的组件，不再冲突
           Video(controller: controller),
           
           if (_isLoading)
@@ -133,6 +152,8 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
                   const CircularProgressIndicator(color: Colors.blueAccent),
                   const SizedBox(height: 20),
                   Text(_statusText, style: const TextStyle(color: Colors.white, fontSize: 16)),
+                  const SizedBox(height: 10),
+                  const Text("首次加载 4K 可能需要较长时间", style: TextStyle(color: Colors.grey, fontSize: 12)),
                 ],
               ),
             ),
@@ -148,13 +169,16 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
                     icon: const Icon(Icons.arrow_back_ios, color: Colors.white, shadows: [Shadow(blurRadius: 10, color: Colors.black)]),
                     onPressed: () => Navigator.pop(context),
                   ),
-                  if (!_isLoading)
-                    Container(
+                  // 点击显示/隐藏调试信息
+                  GestureDetector(
+                    onTap: () {},
+                    child: Container(
                       padding: const EdgeInsets.all(8),
                       margin: const EdgeInsets.only(top: 8),
                       decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(8)),
                       child: Text(_debugInfo, style: const TextStyle(color: Colors.greenAccent, fontSize: 12)),
                     ),
+                  ),
                 ],
               ),
             ),
