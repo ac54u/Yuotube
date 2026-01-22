@@ -22,8 +22,9 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
   String _statusText = "初始化引擎...";
   String _debugInfo = "";
   
-  // 🔥 关键：定义一个与之前伪装一致的 UserAgent
-  final String _userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15";
+  // 🔥 核心修正：使用你抓包中验证通过的 Windows Chrome UA
+  // 这个身份是 YouTube 最信任的，4K 也就是它给的
+  final String _userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.18 Safari/537.36";
 
   @override
   void initState() {
@@ -38,8 +39,6 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
   }
 
   Future<void> _initPlayer() async {
-    // 配置 MPV 底层参数
-    // 🔥 修复：移除了不支持的 iosAudioSessionCategory 参数
     player = Player();
     
     controller = VideoController(
@@ -76,7 +75,6 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
       final videoUrl = bestVideo.url.toString();
       final audioUrl = bestAudio.url.toString();
       
-      // 计算码率用于显示
       final kbps = (bestAudio.bitrate.bitsPerSecond / 1000).ceil();
 
       if (mounted) {
@@ -84,28 +82,35 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
           _debugInfo = "画质: ${bestVideo.videoQuality} (${bestVideo.videoResolution})\n"
                        "编码: ${bestVideo.codec}\n"
                        "音质: ${kbps} kbps\n"
-                       "状态: 正在请求视频流..."; 
+                       "状态: 正在建立加密连接..."; 
           _statusText = "缓冲中...";
         });
       }
 
-      // 🔥 3. 核心修复：带 Headers 播放
-      // 如果不带 UA，YouTube 会返回 403 Forbidden，导致一直转圈
+      // 🔥 3. 绝杀：暴力修改 HTTP Headers
+      // MPV 默认会用 "libmpv" 做 UA，这会被 YouTube 屏蔽。
+      // 我们通过 http-header-fields 强制覆盖它。
       await player.open(
         Media(
           videoUrl,
           extras: {
-            // 加载外部音轨
             'audio-file': audioUrl,
             
-            // 伪装浏览器身份 (关键！)
+            // 方法 A：标准 UA 设置
             'user-agent': _userAgent,
-            'http-header-fields': 'Referer: https://www.youtube.com/',
             
-            // 性能优化参数
-            'demuxer-max-bytes': '32MiB', // 增大缓冲区
-            'network-timeout': '15', // 超时设定
-            'hwdec': 'auto', // 强制尝试硬解
+            // 方法 B：底层 Header 注入 (双重保险)
+            // 这会强制替换掉所有请求头里的 User-Agent
+            'http-header-fields': [
+              'User-Agent: $_userAgent',
+              'Referer: https://www.youtube.com/',
+              'Origin: https://www.youtube.com'
+            ].join(','),
+            
+            // 缓冲优化
+            'demuxer-max-bytes': '50MiB', // 加大缓冲区到 50M
+            'network-timeout': '30',
+            'hwdec': 'auto',
           },
         ),
         play: true,
@@ -114,7 +119,7 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
       if (mounted) {
         setState(() {
           _isLoading = false;
-          _debugInfo += "\n✅ 连接成功";
+          _debugInfo += "\n✅ 数据流已接通";
         });
       }
 
@@ -152,8 +157,6 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
                   const CircularProgressIndicator(color: Colors.blueAccent),
                   const SizedBox(height: 20),
                   Text(_statusText, style: const TextStyle(color: Colors.white, fontSize: 16)),
-                  const SizedBox(height: 10),
-                  const Text("首次加载 4K 可能需要较长时间", style: TextStyle(color: Colors.grey, fontSize: 12)),
                 ],
               ),
             ),
@@ -169,7 +172,6 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
                     icon: const Icon(Icons.arrow_back_ios, color: Colors.white, shadows: [Shadow(blurRadius: 10, color: Colors.black)]),
                     onPressed: () => Navigator.pop(context),
                   ),
-                  // 点击显示/隐藏调试信息
                   GestureDetector(
                     onTap: () {},
                     child: Container(
