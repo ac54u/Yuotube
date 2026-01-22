@@ -22,13 +22,14 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
   String _statusText = "初始化引擎...";
   String _debugInfo = "";
   
-  // 🔥 核心修正：使用你抓包中验证通过的 Windows Chrome UA
-  // 这个身份是 YouTube 最信任的，4K 也就是它给的
+  // 🔥 核心伪装：使用抓包中验证通过的 Windows Chrome UA
+  // 这个身份是 YouTube 目前最信任的，能稳定通过 403 检测
   final String _userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.18 Safari/537.36";
 
   @override
   void initState() {
     super.initState();
+    // 强制横屏体验
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeRight,
       DeviceOrientation.landscapeLeft
@@ -44,7 +45,7 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
     controller = VideoController(
       player,
       configuration: const VideoControllerConfiguration(
-        enableHardwareAcceleration: true, // 开启硬解
+        enableHardwareAcceleration: true, // 开启硬件解码，降低发热
       ),
     );
 
@@ -62,12 +63,12 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
     try {
       var manifest = await explode.videos.streamsClient.getManifest(widget.videoId);
       
-      // 1. 找 4K 视频流
+      // 1. 筛选 4K 视频流 (优先找 2160p)
       var videoStreams = manifest.video.toList();
       videoStreams.sort((a, b) => b.videoResolution.height.compareTo(a.videoResolution.height));
       var bestVideo = videoStreams.first;
       
-      // 2. 找最高音质
+      // 2. 筛选最高音质
       var audioStreams = manifest.audio.toList();
       audioStreams.sort((a, b) => b.bitrate.compareTo(a.bitrate));
       var bestAudio = audioStreams.first;
@@ -75,6 +76,7 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
       final videoUrl = bestVideo.url.toString();
       final audioUrl = bestAudio.url.toString();
       
+      // 计算码率用于显示
       final kbps = (bestAudio.bitrate.bitsPerSecond / 1000).ceil();
 
       if (mounted) {
@@ -82,35 +84,36 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
           _debugInfo = "画质: ${bestVideo.videoQuality} (${bestVideo.videoResolution})\n"
                        "编码: ${bestVideo.codec}\n"
                        "音质: ${kbps} kbps\n"
-                       "状态: 正在建立加密连接..."; 
+                       "状态: 正在建立加密通道..."; 
           _statusText = "缓冲中...";
         });
       }
 
-      // 🔥 3. 绝杀：暴力修改 HTTP Headers
-      // MPV 默认会用 "libmpv" 做 UA，这会被 YouTube 屏蔽。
+      // 🔥 3. 绝杀修复：暴力修改 HTTP Headers
+      // MPV 默认会用 "libmpv" 做 UA，这会被 YouTube 403 屏蔽。
       // 我们通过 http-header-fields 强制覆盖它。
       await player.open(
         Media(
           videoUrl,
           extras: {
+            // 加载外部音轨 (实现音画同步)
             'audio-file': audioUrl,
             
-            // 方法 A：标准 UA 设置
+            // 方案 A：告诉 MPV 修改 UA
             'user-agent': _userAgent,
             
-            // 方法 B：底层 Header 注入 (双重保险)
-            // 这会强制替换掉所有请求头里的 User-Agent
+            // 方案 B：底层 HTTP Header 注入 (双重保险)
+            // 这会强制替换掉请求头里的 User-Agent 和 Referer
             'http-header-fields': [
               'User-Agent: $_userAgent',
               'Referer: https://www.youtube.com/',
               'Origin: https://www.youtube.com'
             ].join(','),
             
-            // 缓冲优化
-            'demuxer-max-bytes': '50MiB', // 加大缓冲区到 50M
+            // 缓冲优化：加大到 64M，防止 4K 播放卡顿
+            'demuxer-max-bytes': '64MiB', 
             'network-timeout': '30',
-            'hwdec': 'auto',
+            'hwdec': 'auto', // 自动选择硬解
           },
         ),
         play: true,
@@ -119,7 +122,7 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
       if (mounted) {
         setState(() {
           _isLoading = false;
-          _debugInfo += "\n✅ 数据流已接通";
+          _debugInfo += "\n✅ 数据流已接通 (UA伪装成功)";
         });
       }
 
@@ -133,6 +136,7 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
 
   @override
   void dispose() {
+    // 退出时恢复竖屏
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     player.dispose();
@@ -146,6 +150,7 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
       body: Stack(
         alignment: Alignment.center,
         children: [
+          // 视频渲染层
           Video(controller: controller),
           
           if (_isLoading)
@@ -157,10 +162,13 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
                   const CircularProgressIndicator(color: Colors.blueAccent),
                   const SizedBox(height: 20),
                   Text(_statusText, style: const TextStyle(color: Colors.white, fontSize: 16)),
+                  const SizedBox(height: 10),
+                  const Text("正在绕过 YouTube 限制...", style: TextStyle(color: Colors.grey, fontSize: 12)),
                 ],
               ),
             ),
 
+          // 调试信息浮层
           Positioned(
             top: 20,
             left: 20,
