@@ -6,7 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/youtube_service.dart';
 import '../services/download_service.dart';
 import 'video_player_screen.dart';
-import 'browser_player_screen.dart'; // 🔥 核心修改：引入新的纯净浏览器页面
+import 'browser_player_screen.dart'; // 保留浏览器作为备用
+import 'native_player_screen.dart';  // 🔥 核心修改：引入原生 MPV 播放器
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -151,19 +152,19 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 16),
-              child: Text("选择操作", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
+              child: Text("选择播放方式", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
             ),
 
-            // 🔵 选项 1: 纯净浏览器播放 (推荐)
+            // 🔥 选项 1: 原生内核播放 (MPV) - 这里的 4K 是真的！
             ListTile(
-              leading: const Icon(Icons.public, color: Colors.blueAccent, size: 30),
-              title: const Text("浏览器模式 (4K + 登录)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              subtitle: const Text("原生体验 • 解决所有登录/画质问题", style: TextStyle(color: Colors.greenAccent, fontSize: 12)),
+              leading: const Icon(Icons.rocket_launch, color: Colors.purpleAccent, size: 30),
+              title: const Text("原生内核播放 (Infuse模式)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              subtitle: const Text("真 4K HDR • MPV 硬解 • 音画分离", style: TextStyle(color: Colors.grey, fontSize: 12)),
               trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
               onTap: () {
                 Navigator.pop(ctx);
-                // 🔥 核心修改：跳转到 BrowserPlayerScreen
-                Navigator.push(context, MaterialPageRoute(builder: (_) => BrowserPlayerScreen(
+                // 跳转到 NativePlayerScreen
+                Navigator.push(context, MaterialPageRoute(builder: (_) => NativePlayerScreen(
                   videoId: videoId,
                 )));
               },
@@ -171,12 +172,25 @@ class _HomeScreenState extends State<HomeScreen> {
 
             const Divider(color: Colors.white10),
 
-            // 🟢 选项 2: 极速播放 (原生 API)
+            // 🔵 选项 2: 浏览器模式 (备用)
+            ListTile(
+              leading: const Icon(Icons.public, color: Colors.blueAccent, size: 30),
+              title: const Text("浏览器模式 (登录备用)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              subtitle: const Text("网页模拟 • 支持登录/评论", style: TextStyle(color: Colors.grey, fontSize: 12)),
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.push(context, MaterialPageRoute(builder: (_) => BrowserPlayerScreen(
+                  videoId: videoId,
+                )));
+              },
+            ),
+
+            // 🟢 选项 3: 极速预览 (720p)
             if (playbackOptions.isNotEmpty)
               ListTile(
                 leading: const Icon(Icons.play_circle_fill, color: Colors.greenAccent, size: 30),
-                title: const Text("极速播放 (720p)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                subtitle: const Text("直连秒开 • 无广告", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                title: const Text("极速预览 (720p)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                subtitle: const Text("省流模式 • 快速查看", style: TextStyle(color: Colors.grey, fontSize: 12)),
                 onTap: () {
                   Navigator.pop(ctx);
                   var stableVideo = playbackOptions.first; 
@@ -188,7 +202,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 },
               ),
 
-            // 🔴 选项 3: 下载
+            // 🔴 选项 4: 下载
             if (downloadOptions.isNotEmpty) ...[
                const Padding(
                 padding: EdgeInsets.only(left: 16, top: 8, bottom: 8),

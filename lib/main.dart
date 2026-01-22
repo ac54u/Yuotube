@@ -1,6 +1,6 @@
-import 'package:flutter/material.dart';
-import 'package:media_kit/media_kit.dart'; // 核心：初始化播放器引擎
-import 'screens/home_screen.dart'; // 引入我们拆分出去的首页
+    import 'package:flutter/material.dart';
+import 'package:media_kit/media_kit.dart'; // 🔥 核心：初始化播放器引擎
+import 'screens/home_screen.dart'; // 引入首页
 import 'screens/profile_screen.dart'; // 引入个人中心
 
 void main() {
@@ -40,6 +40,7 @@ class MyApp extends StatelessWidget {
           titleTextStyle: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
         ),
       ),
+      // 指向带有底部导航的主布局
       home: const MainLayout(),
     );
   }
