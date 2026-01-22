@@ -22,14 +22,14 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
   String _statusText = "初始化引擎...";
   String _debugInfo = "";
   
-  // 🔥 核心修正：改用 iOS Safari UA
-  // 必须与 URL 中的 &c=IOS 参数匹配，否则会报 403 错误
+  // 🔥 核心策略：全程伪装成 iPhone (iOS 17)
+  // 必须与 YouTube 的 c=IOS 参数配合，否则 403
   final String _userAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1";
 
   @override
   void initState() {
     super.initState();
-    // 强制横屏体验
+    // 强制横屏
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeRight,
       DeviceOrientation.landscapeLeft
@@ -41,34 +41,33 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
 
   Future<void> _initPlayer() async {
     player = Player();
-    
-    controller = VideoController(
-      player,
-      configuration: const VideoControllerConfiguration(
-        enableHardwareAcceleration: true, // 开启硬解
-      ),
-    );
+    controller = VideoController(player, configuration: const VideoControllerConfiguration(enableHardwareAcceleration: true));
 
     try {
       await _loadVideoSource();
     } catch (e) {
-      if (mounted) setState(() => _statusText = "解析失败: $e");
+      if (mounted) setState(() => _statusText = "解析中断: $e");
     }
   }
 
   Future<void> _loadVideoSource() async {
     setState(() => _statusText = "正在解析 4K 资源...");
     
+    // 初始化解析器
     var explode = yt.YoutubeExplode();
+    
     try {
+      // 1. 获取视频流清单
+      // 如果这里报错 VideoUnavailable，说明是库版本旧了，请务必执行 pubspec.yaml 的 git 升级
       var manifest = await explode.videos.streamsClient.getManifest(widget.videoId);
       
-      // 1. 筛选 4K 视频流
+      // 2. 筛选 4K 视频流
       var videoStreams = manifest.video.toList();
+      // 优先找高分辨率
       videoStreams.sort((a, b) => b.videoResolution.height.compareTo(a.videoResolution.height));
       var bestVideo = videoStreams.first;
       
-      // 2. 筛选最高音质
+      // 3. 筛选最高音质
       var audioStreams = manifest.audio.toList();
       audioStreams.sort((a, b) => b.bitrate.compareTo(a.bitrate));
       var bestAudio = audioStreams.first;
@@ -83,12 +82,12 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
           _debugInfo = "画质: ${bestVideo.videoQuality} (${bestVideo.videoResolution})\n"
                        "编码: ${bestVideo.codec}\n"
                        "音质: ${kbps} kbps\n"
-                       "状态: 正在匹配 iOS 密钥..."; 
+                       "状态: 正在建立 iOS 安全通道..."; 
           _statusText = "缓冲中...";
         });
       }
 
-      // 🔥 3. 注入 iOS 身份信息
+      // 🔥 4. 播放器配置：Header 注入
       await player.open(
         Media(
           videoUrl,
@@ -98,7 +97,7 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
             // 告诉 MPV 我们是 iPhone
             'user-agent': _userAgent,
             
-            // 双重保险
+            // 这里的 Referer 也很重要
             'http-header-fields': [
               'User-Agent: $_userAgent',
               'Referer: https://www.youtube.com/',
@@ -116,13 +115,18 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
       if (mounted) {
         setState(() {
           _isLoading = false;
-          _debugInfo += "\n✅ 身份验证通过";
+          _debugInfo += "\n✅ 通道已建立";
         });
       }
 
     } catch (e) {
-      if (mounted) setState(() => _statusText = "错误: $e");
-      rethrow;
+      // 捕获那个 VideoUnavailableException 错误并显示出来
+      if (mounted) {
+        setState(() {
+          _statusText = "错误: ${e.toString().split('\n').first}"; // 只显示第一行错误
+        });
+      }
+      print("详细错误: $e");
     } finally {
       explode.close();
     }
@@ -148,13 +152,20 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
           if (_isLoading)
             Container(
               color: Colors.black87,
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const CircularProgressIndicator(color: Colors.blueAccent),
-                  const SizedBox(height: 20),
-                  Text(_statusText, style: const TextStyle(color: Colors.white, fontSize: 16)),
-                ],
+              child: Padding(
+                padding: const EdgeInsets.all(20.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const CircularProgressIndicator(color: Colors.blueAccent),
+                    const SizedBox(height: 20),
+                    Text(
+                      _statusText, 
+                      style: const TextStyle(color: Colors.white, fontSize: 14),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
               ),
             ),
 
