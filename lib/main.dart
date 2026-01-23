@@ -1,13 +1,26 @@
-    import 'package:flutter/material.dart';
-import 'package:media_kit/media_kit.dart'; // 🔥 核心：初始化播放器引擎
-import 'screens/home_screen.dart'; // 引入首页
-import 'screens/profile_screen.dart'; // 引入个人中心
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:media_kit/media_kit.dart';
+import 'screens/home_screen.dart';
+import 'screens/profile_screen.dart';
+
+// 🔥 核弹级补丁：全局忽略 SSL 证书错误
+// 这能让 App 彻底无视 Surge/Clash 的 MitM 拦截
+class MyHttpOverrides extends HttpOverrides {
+  @override
+  HttpClient createHttpClient(SecurityContext? context) {
+    return super.createHttpClient(context)
+      ..badCertificateCallback = (X509Certificate cert, String host, int port) => true;
+  }
+}
 
 void main() {
-  // 1. 确保 Flutter 绑定初始化
   WidgetsFlutterBinding.ensureInitialized();
   
-  // 2. 🔥 核心：初始化 MediaKit (否则播放器会报错)
+  // 🔥 激活全局 SSL 绕过 (针对 Surge 用户)
+  HttpOverrides.global = MyHttpOverrides();
+  
+  // 初始化播放器内核
   MediaKit.ensureInitialized();
   
   runApp(const MyApp());
@@ -19,9 +32,8 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      debugShowCheckedModeBanner: false,
+      debugShowCheckedModeBanner: false, // 去掉右上角 DEBUG 标签
       title: 'TrollStore YT Pro',
-      // 全局暗黑主题配置
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF18181B),
         cardColor: const Color(0xFF27272A),
@@ -32,21 +44,12 @@ class MyApp extends StatelessWidget {
           surface: const Color(0xFF27272A),
         ),
         useMaterial3: true,
-        // 全局 AppBar 样式
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          centerTitle: true,
-          titleTextStyle: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-        ),
       ),
-      // 指向带有底部导航的主布局
       home: const MainLayout(),
     );
   }
 }
 
-// 主布局：负责底部导航栏切换
 class MainLayout extends StatefulWidget {
   const MainLayout({super.key});
 
@@ -56,8 +59,6 @@ class MainLayout extends StatefulWidget {
 
 class _MainLayoutState extends State<MainLayout> {
   int _currentIndex = 0;
-  
-  // 页面列表：首页 & 个人中心
   final List<Widget> _pages = [
     const HomeScreen(), 
     const ProfileScreen()
@@ -66,21 +67,15 @@ class _MainLayoutState extends State<MainLayout> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: _pages[_currentIndex], // 显示当前选中的页面
+      body: _pages[_currentIndex],
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,
         onDestinationSelected: (index) => setState(() => _currentIndex = index),
         backgroundColor: const Color(0xFF27272A),
         indicatorColor: Theme.of(context).primaryColor.withOpacity(0.2),
         destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.download_rounded), 
-            label: '首页'
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.person_rounded), 
-            label: '我的'
-          ),
+          NavigationDestination(icon: Icon(Icons.download_rounded), label: '首页'),
+          NavigationDestination(icon: Icon(Icons.person_rounded), label: '我的'),
         ],
       ),
     );
