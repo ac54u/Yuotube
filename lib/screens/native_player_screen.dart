@@ -19,7 +19,7 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
   late final VideoController controller;
 
   bool _isLoading = true;
-  String _statusText = "正在连接 Cobalt 高速通道...";
+  String _statusText = "启动全网节点扫描...";
   String _debugInfo = "";
 
   @override
@@ -38,23 +38,41 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
     controller = VideoController(player, configuration: const VideoControllerConfiguration(enableHardwareAcceleration: true));
 
     try {
-      await _startCobaltSequence();
+      await _startUniversalParsing();
     } catch (e) {
-      if (mounted) setState(() => _statusText = "解析失败: $e\n请尝试切换 VPN 节点");
+      if (mounted) setState(() => _statusText = "全网节点均不可用\n建议更换 VPN 地区");
     }
   }
 
-  // 🔥 专注 Cobalt 协议 (目前最稳的 4K 方案)
-  Future<void> _startCobaltSequence() async {
-    // 两个最强的 Cobalt 实例
+  // 🚀 核心总控：全协议轮询
+  Future<void> _startUniversalParsing() async {
+    // 1. 优先尝试 Cobalt (画质最佳)
+    if (await _tryCobaltSequence()) return;
+
+    // 2. 失败则尝试 Piped (节点最多)
+    if (await _tryPipedSequence()) return;
+
+    // 3. 最后尝试 Invidious (兜底)
+    if (await _tryInvidiousSequence()) return;
+
+    throw Exception("所有协议节点均失效");
+  }
+
+  // ----------------------------------------------------------------
+  // 🟢 协议 A: Cobalt (4K 直链)
+  // ----------------------------------------------------------------
+  Future<bool> _tryCobaltSequence() async {
     final instances = [
-      "https://api.cobalt.tools",          // 官方主节点
-      "https://cobalt.api.kwiatekmiki.pl", // 欧洲备用
+      "https://api.cobalt.tools",
+      "https://cobalt.api.kwiatekmiki.pl",
+      "https://api.cobalt.rogery.dev",
+      "https://cobalt.tools", 
     ];
 
-    for (final host in instances) {
-      if (!mounted) return;
-      setState(() => _statusText = "正在请求服务器: ${Uri.parse(host).host}...");
+    for (var i = 0; i < instances.length; i++) {
+      final host = instances[i];
+      if (!mounted) return false;
+      setState(() => _statusText = "正在尝试 Cobalt 节点 (${i + 1}/${instances.length})...");
 
       try {
         final response = await http.post(
@@ -66,39 +84,125 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
           },
           body: jsonEncode({
             "url": "https://www.youtube.com/watch?v=${widget.videoId}",
-            "vQuality": "max", // 🔥 强制请求最高画质 (4K/8K)
+            "vQuality": "max",
             "filenamePattern": "basic"
           })
-        ).timeout(const Duration(seconds: 15));
+        ).timeout(const Duration(seconds: 5)); // 快速跳过
 
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body);
-          
-          if (data['status'] == 'error' || data['url'] == null) {
-            print("节点 $host 返回错误: ${data['text']}");
-            continue; // 换下一个
+          if (data['url'] != null) {
+            await _playMedia(data['url'], "Cobalt (${Uri.parse(host).host})");
+            return true;
           }
-
-          final url = data['url'];
-          await _playMedia(url, "Cobalt (${Uri.parse(host).host})");
-          return; // 成功！
-        } else {
-          print("节点 $host 状态码: ${response.statusCode}");
         }
       } catch (e) {
-        print("节点 $host 连接超时: $e");
+        print("Cobalt $host 失败: $e");
         continue;
       }
     }
-    
-    throw Exception("所有 Cobalt 节点均繁忙或被墙");
+    return false;
   }
 
-  Future<void> _playMedia(String url, String sourceName) async {
+  // ----------------------------------------------------------------
+  // 🟡 协议 B: Piped (最稳健)
+  // ----------------------------------------------------------------
+  Future<bool> _tryPipedSequence() async {
+    final instances = [
+      "https://pipedapi.kavin.rocks",
+      "https://api.piped.privacy.com.de",
+      "https://pipedapi.drgns.space",
+      "https://pa.il.ax",
+      "https://piped-api.lunar.icu",
+      "https://pipedapi.smnz.de",
+      "https://api.piped.yt",
+    ];
+
+    for (var i = 0; i < instances.length; i++) {
+      final host = instances[i];
+      if (!mounted) return false;
+      setState(() => _statusText = "正在尝试 Piped 节点 (${i + 1}/${instances.length})...");
+
+      try {
+        final response = await http.get(
+          Uri.parse("$host/streams/${widget.videoId}")
+        ).timeout(const Duration(seconds: 5));
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          final List<dynamic> videoStreams = data['videoStreams'];
+          
+          // 找最高画质 videoOnly
+          var bestVideo = videoStreams.where((e) => e['videoOnly'] == true).toList();
+          if (bestVideo.isEmpty) bestVideo = videoStreams;
+          bestVideo.sort((a, b) => (b['height'] ?? 0).compareTo(a['height'] ?? 0));
+
+          if (bestVideo.isNotEmpty) {
+            final targetVideo = bestVideo.first;
+            
+            // 找音频
+            final List<dynamic> audioStreams = data['audioStreams'];
+            audioStreams.sort((a, b) => (b['bitrate'] ?? 0).compareTo(a['bitrate'] ?? 0));
+            final targetAudio = audioStreams.isNotEmpty ? audioStreams.first : null;
+
+            await _playMedia(
+              targetVideo['url'], 
+              "Piped (${Uri.parse(host).host})", 
+              audioUrl: targetAudio?['url']
+            );
+            return true;
+          }
+        }
+      } catch (e) {
+        continue;
+      }
+    }
+    return false;
+  }
+
+  // ----------------------------------------------------------------
+  // 🟠 协议 C: Invidious (最后的防线)
+  // ----------------------------------------------------------------
+  Future<bool> _tryInvidiousSequence() async {
+    final instances = [
+      "https://inv.tux.pizza",
+      "https://invidious.drgns.space",
+      "https://vid.puffyan.us",
+      "https://invidious.privacydev.net",
+    ];
+
+    for (var i = 0; i < instances.length; i++) {
+      final host = instances[i];
+      if (!mounted) return false;
+      setState(() => _statusText = "正在尝试 Invidious 节点 (${i + 1}/${instances.length})...");
+
+      try {
+        final response = await http.get(
+          Uri.parse("$host/api/v1/videos/${widget.videoId}")
+        ).timeout(const Duration(seconds: 5));
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          final List<dynamic> formatStreams = data['formatStreams'];
+          formatStreams.sort((a, b) => (b['height'] ?? 0).compareTo(a['height'] ?? 0));
+
+          if (formatStreams.isNotEmpty) {
+            await _playMedia(formatStreams.first['url'], "Invidious (${Uri.parse(host).host})");
+            return true;
+          }
+        }
+      } catch (e) {
+        continue;
+      }
+    }
+    return false;
+  }
+
+  Future<void> _playMedia(String url, String sourceName, {String? audioUrl}) async {
     if (mounted) {
       setState(() {
-        _debugInfo = "来源: $sourceName\n协议: 4K 直链 (无风控)\n状态: 缓冲中...";
-        _statusText = "获取成功，即将播放...";
+        _debugInfo = "✅ 解析成功\n节点: $sourceName\n状态: 缓冲中...";
+        _statusText = "资源获取成功，准备播放...";
       });
     }
 
@@ -106,9 +210,10 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
       Media(
         url,
         extras: {
-          'tls-verify': 'no', // MPV 也忽略证书
+          if (audioUrl != null) 'audio-file': audioUrl,
+          'tls-verify': 'no', // 忽略证书
           'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'demuxer-max-bytes': '100MiB', // 加大缓存到 100M
+          'demuxer-max-bytes': '64MiB',
         },
       ),
       play: true,
@@ -117,7 +222,7 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
     if (mounted) {
       setState(() {
         _isLoading = false;
-        _debugInfo += "\n✅ 播放开始";
+        _debugInfo += "\n▶️ 播放开始";
       });
     }
   }
