@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io'; // 🔥 需要这个来处理证书
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
-import 'package:http/io_client.dart'; // 🔥 需要这个来创建自定义 Client
+import 'package:http/io_client.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
@@ -21,16 +21,23 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
   late final VideoController controller;
 
   bool _isLoading = true;
-  String _statusText = "正在连接中转节点...";
+  String _statusText = "正在优选线路...";
   String _debugInfo = "";
   
-  // Piped 实例列表
+  // 🔥 超级节点列表 (包含欧洲、美国、亚洲等地的 Piped 实例)
+  // 只要这里面有一个活的，你就能看！
   final List<String> _apiInstances = [
-    "https://pipedapi.kavin.rocks",
-    "https://api.piped.privacy.com.de",
-    "https://pipedapi.drgns.space",
-    "https://pa.il.ax",
-    "https://piped-api.lunar.icu",
+    "https://pipedapi.kavin.rocks",          // 官方主节点 (常拥堵)
+    "https://api.piped.privacy.com.de",      // 德国 (稳)
+    "https://pipedapi.drgns.space",          // 美国
+    "https://pa.il.ax",                      // 以色列
+    "https://piped-api.lunar.icu",           // 德国
+    "https://pipedapi.ducks.party",          // 欧洲
+    "https://api.piped.projectsegfau.lt",    // 法国
+    "https://pipedapi.smnz.de",              // 德国
+    "https://api.piped.yt",                  // 备用
+    "https://pipedapi.moomoo.me",            // 备用
+    "https://pipedapi.leptons.xyz",          // 备用
   ];
   int _currentApiIndex = 0;
 
@@ -54,46 +61,50 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
     try {
       await _fetchStreamFromPiped();
     } catch (e) {
-      if (mounted) setState(() => _statusText = "全线崩溃: $e");
+      if (mounted) setState(() => _statusText = "所有线路均繁忙，请稍后再试");
     }
   }
 
-  // 🔥 核心：创建一个“不安全”的客户端，忽略 Surge 的证书错误
+  // 忽略 SSL 证书 (穿透 Surge)
   http.Client _getUnsafeClient() {
     final ioClient = HttpClient()
-      ..badCertificateCallback = (X509Certificate cert, String host, int port) => true; // 👈 无论证书啥样，统统放行
+      ..badCertificateCallback = (X509Certificate cert, String host, int port) => true;
     return IOClient(ioClient);
   }
 
   Future<void> _fetchStreamFromPiped() async {
-    setState(() => _statusText = "正在请求无污染资源 (SSL Bypass)...");
+    if (_currentApiIndex >= _apiInstances.length) {
+      throw Exception("所有节点已尝试完毕");
+    }
+
+    final currentApi = _apiInstances[_currentApiIndex];
+    if (mounted) setState(() => _statusText = "正在尝试线路 ${_currentApiIndex + 1}/${_apiInstances.length}...\n(${Uri.parse(currentApi).host})");
 
     try {
-      final apiUrl = "${_apiInstances[_currentApiIndex]}/streams/${widget.videoId}";
-      print("正在请求 API: $apiUrl");
+      final apiUrl = "$currentApi/streams/${widget.videoId}";
+      print("Testing API: $apiUrl");
 
-      // 🔥 使用自定义的 client 发送请求
       final client = _getUnsafeClient();
-      final response = await client.get(Uri.parse(apiUrl));
-      client.close(); // 用完记得关闭
+      // 设置 5 秒超时，快速跳过坏节点
+      final response = await client.get(Uri.parse(apiUrl)).timeout(const Duration(seconds: 5));
+      client.close();
       
       if (response.statusCode != 200) {
-        throw Exception("API 拒绝服务: ${response.statusCode}");
+        throw Exception("HTTP ${response.statusCode}");
       }
 
       final data = jsonDecode(response.body);
       
       // 1. 提取视频流
       final List<dynamic> videoStreams = data['videoStreams'];
-      // 过滤出只有视频的流 (videoOnly)，通常 4K 都在这里
+      // 优先找 videoOnly (通常是 1080p/4K)
       var bestVideo = videoStreams.where((e) => e['videoOnly'] == true).toList();
-      
       if (bestVideo.isEmpty) bestVideo = videoStreams;
 
-      // 降序排列 (分辨率高在前)
+      // 排序：分辨率降序
       bestVideo.sort((a, b) => (b['height'] ?? 0).compareTo(a['height'] ?? 0)); 
 
-      if (bestVideo.isEmpty) throw Exception("没有找到视频流");
+      if (bestVideo.isEmpty) throw Exception("无视频流");
       final targetVideo = bestVideo.first; 
 
       // 2. 提取音频流
@@ -106,24 +117,20 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
 
       if (mounted) {
         setState(() {
-          _debugInfo = "来源: Piped API (已绕过证书验证)\n"
-                       "画质: ${targetVideo['quality']}\n"
+          _debugInfo = "节点: ${Uri.parse(currentApi).host}\n"
+                       "画质: ${targetVideo['quality'] ?? 'Unknown'}\n"
                        "格式: ${targetVideo['format']}\n"
-                       "状态: 准备播放..."; 
+                       "状态: 缓冲中..."; 
         });
       }
 
-      // 3. 喂给 MPV 播放器
+      // 3. 播放
       await player.open(
         Media(
           videoUrl,
           extras: {
             if (audioUrl != null) 'audio-file': audioUrl,
-            
-            // 🔥 关键：告诉 MPV 内核也忽略 SSL 证书错误
-            // 否则虽然 API 通了，但视频流可能会被 Surge 拦住
-            'tls-verify': 'no', 
-            
+            'tls-verify': 'no', // 忽略播放器的 SSL 报错
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.18 Safari/537.36',
             'demuxer-max-bytes': '64MiB',
           },
@@ -139,14 +146,12 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
       }
 
     } catch (e) {
-      print("API 请求失败: $e");
-      // 自动切换下一个 API 节点
-      if (_currentApiIndex < _apiInstances.length - 1) {
-        _currentApiIndex++;
-        if (mounted) setState(() => _statusText = "节点繁忙，切换线路 ${_currentApiIndex + 1}...");
+      print("节点 $currentApi 失败: $e");
+      // 🔥 自动切换下一个节点
+      _currentApiIndex++;
+      if (mounted) {
+        // 递归重试
         await _fetchStreamFromPiped(); 
-      } else {
-        if (mounted) setState(() => _statusText = "解析失败: $e");
       }
     }
   }
@@ -176,9 +181,13 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
                 children: [
                   const CircularProgressIndicator(color: Colors.blueAccent),
                   const SizedBox(height: 20),
-                  Text(_statusText, style: const TextStyle(color: Colors.white, fontSize: 16)),
+                  Text(
+                    _statusText, 
+                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                    textAlign: TextAlign.center,
+                  ),
                   const SizedBox(height: 10),
-                  const Text("正在穿透 SSL 验证...", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                  const Text("正在全球节点中寻找可用服务器...", style: TextStyle(color: Colors.grey, fontSize: 12)),
                 ],
               ),
             ),
