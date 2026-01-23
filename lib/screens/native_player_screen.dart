@@ -1,8 +1,8 @@
 import 'dart:async';
+import 'dart:convert'; // 用于解析 JSON
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-// 使用别名解决命名冲突
-import 'package:youtube_explode_dart/youtube_explode_dart.dart' as yt;
+import 'package:http/http.dart' as http; // 🔥 引入 http 请求库
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
@@ -19,12 +19,17 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
   late final VideoController controller;
 
   bool _isLoading = true;
-  String _statusText = "初始化引擎...";
+  String _statusText = "正在连接中转节点...";
   String _debugInfo = "";
   
-  // 🔥 核心策略：全程伪装成 iPhone (iOS 17)
-  // 必须与 YouTube 的 c=IOS 参数配合，否则 403
-  final String _userAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1";
+  // 🔥 Piped 实例列表 (如果一个挂了，可以换其他的)
+  // 这些服务器专门负责替我们向 YouTube 要链接
+  final List<String> _apiInstances = [
+    "https://pipedapi.kavin.rocks",
+    "https://api.piped.privacy.com.de",
+    "https://pipedapi.drgns.space",
+  ];
+  int _currentApiIndex = 0;
 
   @override
   void initState() {
@@ -44,70 +49,71 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
     controller = VideoController(player, configuration: const VideoControllerConfiguration(enableHardwareAcceleration: true));
 
     try {
-      await _loadVideoSource();
+      await _fetchStreamFromPiped();
     } catch (e) {
-      if (mounted) setState(() => _statusText = "解析中断: $e");
+      if (mounted) setState(() => _statusText = "全线崩溃: $e");
     }
   }
 
-  Future<void> _loadVideoSource() async {
-    setState(() => _statusText = "正在解析 4K 资源...");
-    
-    // 初始化解析器
-    var explode = yt.YoutubeExplode();
-    
-    try {
-      // 1. 获取视频流清单
-      // 如果这里报错 VideoUnavailable，说明是库版本旧了，请务必执行 pubspec.yaml 的 git 升级
-      var manifest = await explode.videos.streamsClient.getManifest(widget.videoId);
-      
-      // 2. 筛选 4K 视频流
-      var videoStreams = manifest.video.toList();
-      // 优先找高分辨率
-      videoStreams.sort((a, b) => b.videoResolution.height.compareTo(a.videoResolution.height));
-      var bestVideo = videoStreams.first;
-      
-      // 3. 筛选最高音质
-      var audioStreams = manifest.audio.toList();
-      audioStreams.sort((a, b) => b.bitrate.compareTo(a.bitrate));
-      var bestAudio = audioStreams.first;
+  // 🔥 核心逻辑：不再用 youtube_explode，改用 Piped API
+  Future<void> _fetchStreamFromPiped() async {
+    setState(() => _statusText = "正在请求无污染资源...");
 
-      final videoUrl = bestVideo.url.toString();
-      final audioUrl = bestAudio.url.toString();
+    try {
+      final apiUrl = "${_apiInstances[_currentApiIndex]}/streams/${widget.videoId}";
+      print("正在请求 API: $apiUrl");
+
+      final response = await http.get(Uri.parse(apiUrl));
       
-      final kbps = (bestAudio.bitrate.bitsPerSecond / 1000).ceil();
+      if (response.statusCode != 200) {
+        throw Exception("API 拒绝服务: ${response.statusCode}");
+      }
+
+      final data = jsonDecode(response.body);
+      
+      // 1. 提取视频流
+      final List<dynamic> videoStreams = data['videoStreams'];
+      // 过滤出只有视频的流 (videoOnly)，通常 4K 都在这里
+      var bestVideo = videoStreams.where((e) => e['videoOnly'] == true).toList();
+      
+      // 如果没有 videoOnly，就找普通的
+      if (bestVideo.isEmpty) bestVideo = videoStreams;
+
+      // 按照分辨率排序 (height 越大越好)
+      bestVideo.sort((a, b) => (b['height'] ?? 0).compareTo(a['height'] ?? 0)); // 降序
+
+      if (bestVideo.isEmpty) throw Exception("没有找到视频流");
+      final targetVideo = bestVideo.first; // 拿到最高画质 (4K)
+
+      // 2. 提取音频流
+      final List<dynamic> audioStreams = data['audioStreams'];
+      // 按照码率排序
+      audioStreams.sort((a, b) => (b['bitrate'] ?? 0).compareTo(a['bitrate'] ?? 0));
+      final targetAudio = audioStreams.isNotEmpty ? audioStreams.first : null;
+
+      final videoUrl = targetVideo['url'];
+      final audioUrl = targetAudio?['url'];
 
       if (mounted) {
         setState(() {
-          _debugInfo = "画质: ${bestVideo.videoQuality} (${bestVideo.videoResolution})\n"
-                       "编码: ${bestVideo.codec}\n"
-                       "音质: ${kbps} kbps\n"
-                       "状态: 正在建立 iOS 安全通道..."; 
-          _statusText = "缓冲中...";
+          _debugInfo = "来源: Piped API (绕过本地风控)\n"
+                       "画质: ${targetVideo['quality']} (${targetVideo['format']})\n"
+                       "编码: ${targetVideo['videoCodec'] ?? 'Unknown'}\n"
+                       "音质: ${targetAudio != null ? (targetAudio['bitrate'] / 1024).round() : 0} kbps\n"
+                       "状态: 缓冲中..."; 
         });
       }
 
-      // 🔥 4. 播放器配置：Header 注入
+      // 3. 喂给 MPV 播放器
+      // Piped 返回的链接通常不需要复杂的 UA 伪装，但带上也没坏处
       await player.open(
         Media(
           videoUrl,
-          extras: {
+          extras: audioUrl != null ? {
             'audio-file': audioUrl,
-            
-            // 告诉 MPV 我们是 iPhone
-            'user-agent': _userAgent,
-            
-            // 这里的 Referer 也很重要
-            'http-header-fields': [
-              'User-Agent: $_userAgent',
-              'Referer: https://www.youtube.com/',
-              'Origin: https://www.youtube.com'
-            ].join(','),
-            
-            'demuxer-max-bytes': '64MiB', 
-            'network-timeout': '30',
-            'hwdec': 'auto', 
-          },
+            // 这里的 UA 可以用标准的，因为 Piped 已经处理过签名了
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.18 Safari/537.36',
+          } : null,
         ),
         play: true,
       );
@@ -115,20 +121,21 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
       if (mounted) {
         setState(() {
           _isLoading = false;
-          _debugInfo += "\n✅ 通道已建立";
+          _debugInfo += "\n✅ 播放成功";
         });
       }
 
     } catch (e) {
-      // 捕获那个 VideoUnavailableException 错误并显示出来
-      if (mounted) {
-        setState(() {
-          _statusText = "错误: ${e.toString().split('\n').first}"; // 只显示第一行错误
-        });
+      print("API 请求失败: $e");
+      // 自动切换下一个 API 节点重试
+      if (_currentApiIndex < _apiInstances.length - 1) {
+        _currentApiIndex++;
+        if (mounted) setState(() => _statusText = "节点繁忙，切换线路 ${_currentApiIndex + 1}...");
+        await _fetchStreamFromPiped(); // 递归重试
+      } else {
+        if (mounted) setState(() => _statusText = "解析失败: 无法获取流地址");
+        rethrow;
       }
-      print("详细错误: $e");
-    } finally {
-      explode.close();
     }
   }
 
@@ -152,20 +159,15 @@ class _NativePlayerScreenState extends State<NativePlayerScreen> {
           if (_isLoading)
             Container(
               color: Colors.black87,
-              child: Padding(
-                padding: const EdgeInsets.all(20.0),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const CircularProgressIndicator(color: Colors.blueAccent),
-                    const SizedBox(height: 20),
-                    Text(
-                      _statusText, 
-                      style: const TextStyle(color: Colors.white, fontSize: 14),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-                ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const CircularProgressIndicator(color: Colors.blueAccent),
+                  const SizedBox(height: 20),
+                  Text(_statusText, style: const TextStyle(color: Colors.white, fontSize: 16)),
+                  const SizedBox(height: 10),
+                  const Text("正在使用云端 API 解析...", style: TextStyle(color: Colors.grey, fontSize: 12)),
+                ],
               ),
             ),
 

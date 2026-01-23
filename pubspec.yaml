@@ -63,7 +63,7 @@ dependencies:
   shared_preferences: ^2.2.2
   
   # 网络请求
-  http: ^1.2.0
+  http: ^1.6.0
   
   # 图片缓存
   cached_network_image: ^3.4.1
